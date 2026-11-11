@@ -44,7 +44,7 @@ namespace Studio
 
         private string topBuffer, bottomBuffer;
         private bool topFocused, bottomFocused;
-        private int bufferOwner = -1;
+        private (Vector2Int root, int selection) bufferOwner = (new Vector2Int(int.MinValue, int.MinValue), -1);
 
         public BlockInspector(StudioShell shell)
         {
@@ -173,9 +173,11 @@ namespace Studio
             var yRow = new Rect(r.x + half + T.S(10f), y, half, T.S(28f));
             SGUI.Label(xRow.TakeLeft(T.S(18f)), "X", T.SmallStrong, new Color(0.90f, 0.33f, 0.29f));
             SGUI.Label(yRow.TakeLeft(T.S(18f)), "Y", T.SmallStrong, new Color(0.30f, 0.62f, 0.91f));
-            if (SGUI.IntField(xRow.CutLeft(T.S(18f)), XField, origin.x, out int newX))
+            // typed values belong to this selection; a different selection drops an unfinished edit
+            object owner = Viewport.Selection.Version;
+            if (SGUI.IntField(xRow.CutLeft(T.S(18f)), XField, origin.x, out int newX, owner))
                 Move(blocks, new Vector2Int(newX - origin.x, 0), 0);
-            if (SGUI.IntField(yRow.CutLeft(T.S(18f)), YField, origin.y, out int newY))
+            if (SGUI.IntField(yRow.CutLeft(T.S(18f)), YField, origin.y, out int newY, owner))
                 Move(blocks, new Vector2Int(0, newY - origin.y), 0);
             y += T.S(36f);
 
@@ -197,7 +199,7 @@ namespace Studio
             var levelRect = new Rect(pad.xMax + T.S(14f), pad.y, r.width - pad.width - T.S(14f), T.S(18f));
             SGUI.Label(levelRect, single ? "Level" : "Lowest level", T.Small, Palette.TextFaint);
             var levelField = new Rect(levelRect.x, levelRect.yMax + T.S(4f), T.S(64f), T.S(28f));
-            if (SGUI.IntField(levelField, LevelField, level, out int newLevel))
+            if (SGUI.IntField(levelField, LevelField, level, out int newLevel, Viewport.Selection.Version))
                 Move(blocks, Vector2Int.zero, Mathf.Clamp(newLevel, 0, editing.MaxHeightSteps) - level);
             var stepUp = new Rect(levelField.xMax + T.S(6f), levelField.y, T.S(28f), T.S(28f));
             if (Outlined(stepUp, IconId.ElevationUp, "Raise  PgUp")) Viewport.RaiseSelection(1);
@@ -290,8 +292,8 @@ namespace Studio
 
             // custom colors (shown for the primary block, applied to all)
             var look = p.Support ?? BlockOperations.DefaultLook;
-            int owner = p.RootCell.Position.GetHashCode() ^ blocks.Count;
-            if (bufferOwner != owner)
+            var owner = (p.RootCell.Position, Viewport.Selection.Version);
+            if (!bufferOwner.Equals(owner))
             {
                 bufferOwner = owner;
                 topBuffer = null;
