@@ -83,6 +83,7 @@ namespace Studio
         public bool ValidationIsStale => LastValidation != null && validationRevision != trackRevision;
         private float lastChangeTime;
         private float autoCheckDelay = 0.8f;
+        private int autoCheckedRevision = -1;
 
         // State queried by TrackEditor
         public bool HasModal => dialogs.Count > 0;
@@ -131,7 +132,8 @@ namespace Studio
             editing.DrawCursorBox = false;
             editing.PreviewVisible = true;
             editing.CameraRotateRequested += OnCameraRotateRequested;
-            editing.IsProtected = Viewport.States.IsLocked;
+            // hidden blocks can't be seen, so they're never replaced or deleted from the keyboard either
+            editing.IsProtected = p => Viewport.States.IsLocked(p) || Viewport.States.IsHidden(p);
             editing.IsHidden = Viewport.States.IsHidden;
             editing.EditRefused += OnEditRefused;
             BlockOperations.States = Viewport.States;
@@ -240,12 +242,14 @@ namespace Studio
         {
             if (!AppSettings.Data.AutoCheck || HasModal || Viewport.IsDragging || Race.Active)
                 return;
-            if (LastValidation != null && validationRevision == trackRevision)
+            // once per revision, whether the check worked or not (a failing check must not repeat every frame)
+            if (autoCheckedRevision == trackRevision || (LastValidation != null && validationRevision == trackRevision))
                 return;
             if (Time.unscaledTime - lastChangeTime < autoCheckDelay)
                 return;
 
             int revision = trackRevision;
+            autoCheckedRevision = revision;
             try
             {
                 SetValidationResult(TrackValidator.Validate(TrackEditor.Track, TrackEditor.TrackUnit));
@@ -255,7 +259,6 @@ namespace Studio
             catch (Exception ex)
             {
                 Debug.LogWarning($"Automatic track check failed: {ex}");
-                validationRevision = revision; // don't retry every frame
                 autoCheckDelay = 3f;
             }
         }
