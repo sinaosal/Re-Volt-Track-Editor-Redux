@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Everything Unity compiles into Assembly-CSharp (all scripts under Assets except Editor folders). -->
+  <PropertyGroup>
+    <AssemblyName>Assembly-CSharp</AssemblyName>
+    <DefineConstants>$(UnityDefines)</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(RepoRoot)Assets\**\*.cs" Exclude="$(RepoRoot)Assets\**\Editor\**\*.cs" />
+    <Reference Include="$(RepoRoot)Assets\JsonDotNet\Assemblies\Standalone\Newtonsoft.Json.dll" Private="false" />
+    <ProjectReference Include="..\UGUI\UnityEngine.UI.csproj" />
+    <ProjectReference Include="..\TMP\Unity.TextMeshPro.csproj" />
+    <ProjectReference Include="..\InputSystem\Unity.InputSystem.csproj" />
+  </ItemGroup>
+</Project>
