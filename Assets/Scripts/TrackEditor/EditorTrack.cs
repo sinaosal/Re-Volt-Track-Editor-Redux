@@ -21,6 +21,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using ReVolt.Track;
 using UnityEngine;
 
 public class EditorTrack : IBinSerializable, ISaveLoad
@@ -42,15 +43,15 @@ public class EditorTrack : IBinSerializable, ISaveLoad
     private EditorTrackCell[] cells = null;
     private bool isDirty = false;
 
+    /// <summary>
+    /// Sidecar data that isn't tied to a single block (unknown sections from newer versions, and
+    /// later race data). Per-block support styles live on the placements themselves.
+    /// </summary>
+    public TrackExtras Extras = new TrackExtras();
+
     // events
     public Action AfterLoadCallback;
     public Action AfterSaveCallback;
-
-    // constants
-    private const int TDF_MAGIC = 0x20464454; //'TDF '
-    private const ushort TDF_VERSION_2 = 2;
-    private const ushort TDF_VERSION_1 = 1;
-    private const int MODULE_NULL = 32767;
 
     // helpers
     private EditorTrackCell[] CreateCellArray(int width, int height)
@@ -143,7 +144,8 @@ public class EditorTrack : IBinSerializable, ISaveLoad
                             Elevation = originalCell.Module.Elevation,
                             ModuleIndex = originalCell.Module.ModuleIndex,
                             Object = originalCell.Module.Object,
-                            Rotation = originalCell.Module.Rotation
+                            Rotation = originalCell.Module.Rotation,
+                            Support = originalCell.Module.Support
                         };
 
                         foreach (var touchedCell in originalCell.Module.TouchedCells)
@@ -176,6 +178,10 @@ public class EditorTrack : IBinSerializable, ISaveLoad
             if (cell.Module != null && cell.Module.RootCell == cell)
                 cell.Module.Delete();
         }
+
+        // pickups loaded onto empty cells aren't removed by Module.Delete()
+        foreach (var cell in cells)
+            cell.HasPickup = false;
     }
 
     public EditorTrack Clone(bool keepObjectReferences)
@@ -195,7 +201,8 @@ public class EditorTrack : IBinSerializable, ISaveLoad
                 Object = (keepObjectReferences) ? rootModulePlacement.Object : null,
                 Position = rootModulePlacement.Position,
                 RootCell = newRootCell,
-                Rotation = rootModulePlacement.Rotation
+                Rotation = rootModulePlacement.Rotation,
+                Support = rootModulePlacement.Support
             };
             newRootCell.Module = newPlacement;
 
@@ -209,143 +216,119 @@ public class EditorTrack : IBinSerializable, ISaveLoad
         return track;
     }
 
-    // File IO
-    public void Save(string filepath)
+    // Document conversion
+    /// <summary>
+    /// Captures the current track (size, name, module root placements and pickups) as a
+    /// Unity-independent document. Used for saving, autosave, and undo/redo snapshots.
+    /// </summary>
+    public TdfDocument ToDocument()
     {
-        using (var bw = new BinaryWriter(File.Open(filepath, FileMode.Create)))
-            WriteBinary(bw);
+        var doc = new TdfDocument(Math.Max(1, Width), Math.Max(1, Height))
+        {
+            Name = Name ?? string.Empty
+        };
+
+        doc.Extras = (Extras ?? new TrackExtras()).Clone();
+        doc.Extras.Supports.Clear();
+
+        for (int i = 0; i < cells.Length; i++)
+        {
+            var cell = cells[i];
+            if (cell.Module != null && cell.Module.RootCell == cell)
+            {
+                int steps = Mathf.RoundToInt(cell.Module.Elevation / EditorConstants.ElevationStep);
+                doc.Cells[i] = new TdfCell((ushort)cell.Module.ModuleIndex,
+                                           (ushort)(((cell.Module.Rotation % 4) + 4) % 4),
+                                           (ushort)Mathf.Clamp(steps, 0, ushort.MaxValue));
+                if (cell.Module.Support.HasValue)
+                    doc.Extras.Supports[(cell.Position.x, cell.Position.y)] = cell.Module.Support.Value;
+            }
+            doc.Pickups[i] = cell.HasPickup;
+        }
+
+        return doc;
     }
 
+    public void SetDirty(bool dirty)
+    {
+        isDirty = dirty;
+    }
+
+    // File IO
+    /// <summary>
+    /// Saves the track atomically; an existing file is only replaced once the new data is fully written.
+    /// </summary>
+    public void Save(string filepath)
+    {
+        TrackFiles.Save(ToDocument(), filepath);
+        AfterSaveCallback?.Invoke();
+    }
+
+    /// <summary>
+    /// Loads track data only (no scene objects are created). Prefer <see cref="TrackEditor.LoadTrackFile"/>,
+    /// which validates the file against the track unit and builds the scene.
+    /// </summary>
     public void Load(string filepath)
     {
-        using (var br = new BinaryReader(File.OpenRead(filepath)))
-            ReadBinary(br);
+        ApplyDocumentData(TrackFiles.Load(filepath));
     }
 
     public void WriteBinary(BinaryWriter writer)
     {
-        writer.Write(TDF_MAGIC);
-        writer.Write(TDF_VERSION_2);
-
-        writer.WritePaddedString(Name);
-
-        writer.Write((ushort)0); // ThemeType, unused
-        writer.Write((int)1); // SectionsUsed, unused
-
-        writer.Write((ushort)Width);
-        writer.Write((ushort)Height);
-
-        // write modules
-        for(int i=0; i < cells.Length; i++)
-        {
-            var cell = cells[i];
-
-            if (cell.Module != null && cell.Module.RootCell == cell)
-            {
-                writer.Write((ushort)cell.Module.ModuleIndex);
-                writer.Write((ushort)cell.Module.Rotation);
-                writer.Write((ushort)(cell.Module.Elevation / EditorConstants.ElevationStep));
-            }
-            else
-            {
-                writer.Write((ushort)MODULE_NULL);
-                writer.Write((ushort)0);
-                writer.Write((ushort)0);
-            }
-        }
-
-        //write pickups
-        var cellsWithPickups = cells.Where(x => x.HasPickup);
-
-        writer.Write((ushort)cellsWithPickups.Count());
-        foreach(var cell in cellsWithPickups)
-        {
-            writer.Write((ushort)cell.Position.x);
-            writer.Write((ushort)cell.Position.y);
-        }
-
-        //
+        writer.Write(ToDocument().ToBytes());
         AfterSaveCallback?.Invoke();
     }
 
     public void ReadBinaryHeader(BinaryReader reader)
     {
-        // read header
         int magic = reader.ReadInt32();
-        if (magic != 0x20464454)
-        {
+        if (magic != TdfDocument.Magic)
             throw new InvalidDataException("Wrong TDF magic.");
-        }
 
         int version = reader.ReadUInt16();
-        if (version != TDF_VERSION_2 && version != TDF_VERSION_1)
-        {
+        if (version != TdfDocument.Version2 && version != TdfDocument.Version1)
             throw new InvalidDataException("Wrong TDF version.");
-        }
 
-        Name = reader.ReadPaddedString();
+        Name = TdfDocument.ReadPaddedString(reader);
     }
 
     public void ReadBinary(BinaryReader reader)
     {
-        // read header
-        int magic = reader.ReadInt32();
-        if(magic != TDF_MAGIC)
+        ApplyDocumentData(TdfDocument.Read(reader.BaseStream));
+    }
+
+    /// <summary>
+    /// Replaces the track data with the document contents without creating scene objects,
+    /// then raises <see cref="AfterLoadCallback"/> so the owner can build them.
+    /// </summary>
+    private void ApplyDocumentData(TdfDocument doc)
+    {
+        Name = doc.Name;
+        Extras = (doc.Extras ?? new TrackExtras()).Clone();
+        cells = null; // discard everything, including stray pickups on empty cells
+        Width = 0;
+        Height = 0;
+        AdjustTrack(new Vector2Int(doc.Width, doc.Height), Vector2Int.zero);
+
+        for (int i = 0; i < doc.Cells.Length; i++)
         {
-            throw new InvalidDataException("Wrong TDF magic.");
-        }
+            var cell = cells[i];
+            cell.HasPickup = doc.Pickups[i];
 
-        int version = reader.ReadUInt16();
-        if(version != TDF_VERSION_2 && version != TDF_VERSION_1)
-        {
-            throw new InvalidDataException("Wrong TDF version.");
-        }
+            var data = doc.Cells[i];
+            if (!data.HasModule)
+                continue;
 
-        Name = reader.ReadPaddedString();
-
-        // read grid info
-        int themeType = reader.ReadUInt16(); // ThemeType, unused
-        int sectionsUsed = reader.ReadInt32(); // SectionsUsed, unused
-
-        int gridSizeX = reader.ReadUInt16();
-        int gridSizeY = reader.ReadUInt16();
-
-        SetSize(gridSizeX, gridSizeY);
-
-        // read module info
-        for(int i=0; i < Width * Height; i++)
-        {
-            int moduleId = reader.ReadUInt16();
-            int direction = reader.ReadUInt16();
-            int elevation = reader.ReadUInt16();
-
-            if(moduleId != MODULE_NULL && moduleId != (int)Modules.ID.TWM_SPACE)
+            cell.Module = new ModulePlacement()
             {
-                int y = i % this.Width;
-                int x = i / this.Width;
-                var cell = cells[i];
-
-                cell.Module = new ModulePlacement()
-                {
-                    RootCell = cell,
-                    Elevation = elevation * EditorConstants.ElevationStep,
-                    Object = null,
-                    ModuleIndex = moduleId,
-                    Position = new Vector2Int(x, y),
-                    Rotation = direction
-                };
-            }
-        }
-
-        if(version >= TDF_VERSION_2)
-        {
-            int numPickups = reader.ReadUInt16();
-            for(int i=0; i < numPickups; i++)
-            {
-                int xPos = reader.ReadUInt16();
-                int yPos = reader.ReadUInt16();
-                GetCell(xPos, yPos).HasPickup = true;
-            }
+                RootCell = cell,
+                Elevation = data.ElevationSteps * EditorConstants.ElevationStep,
+                Object = null,
+                ModuleIndex = data.ModuleId,
+                Position = cell.Position,
+                Rotation = data.Rotation,
+                Support = doc.Extras != null && doc.Extras.Supports.TryGetValue((cell.Position.x, cell.Position.y), out var style) ? style : (SupportStyle?)null
+            };
         }
 
         AfterLoadCallback?.Invoke();
