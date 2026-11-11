@@ -18,8 +18,6 @@
 */
 
 using System.Collections;
-using System.Linq;
-using System.Threading.Tasks;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -101,147 +99,66 @@ public class ExportMode : EditorMode
         ExportStageText.text = string.Format(Localization.Lookup(LocString.EXPORT_STAGE_NUM), stageNumber);
     }
 
-    void ContinuityError(TrackExporter exporter)
+    /// <summary>
+    /// Shows the classic (localized) prompt for a failed export and, for layout problems,
+    /// moves the cursor to where the track breaks.
+    /// </summary>
+    void ShowExportProblem(TrackProblem problem)
     {
-        // set cursor pos
-        if (!exporter.TrackFormsLoop)
+        LocString? localized = null;
+        switch (problem.Kind)
         {
-            //set cursor pos to last zone
-            EditingMode.SetActiveModule((int)Modules.ID.TWM_START);
-            EditingMode.CursorPosition = exporter.Zones[exporter.ZoneSequence.Last().ZoneID].CellCoordinate;
-        }
-        else if (!exporter.AIIsValid)
-        {
-            //set cursor pos to last pos
-            EditingMode.SetActiveModule((int)Modules.ID.TWM_START);
-            EditingMode.CursorPosition = exporter.LastAICell;
-        }
-
-        // throw an error
-        LocString errorMesage;
-        if (exporter.ZoneSequence.Count > 0)
-        {
-            errorMesage = (exporter.LastZoneIsPipe) ? LocString.PROMPT_NO_LOOP_FORMED_PIPE_C
-                                                    : LocString.PROMPT_NO_LOOP_FORMED_STEP_C;
-        }
-        else
-        {
-            errorMesage = (exporter.LastZoneIsPipe) ? LocString.PROMPT_NO_LOOP_FORMED_PIPE
-                                                    : LocString.PROMPT_NO_LOOP_FORMED_STEP;
+            case TrackProblemKind.NoGameFolder:
+                localized = LocString.PROMPT_NO_LEVELS_DIR;
+                break;
+            case TrackProblemKind.MissingStartGrid:
+                localized = LocString.PROMPT_MISSING_START_GRID;
+                break;
+            case TrackProblemKind.MultipleStartGrids:
+                localized = LocString.PROMPT_MULTIPLE_START_GRIDS;
+                break;
+            case TrackProblemKind.NoLoop:
+            case TrackProblemKind.InvalidAIPath:
+                if (problem.HasZoneSequence)
+                    localized = problem.LastZoneIsPipe ? LocString.PROMPT_NO_LOOP_FORMED_PIPE_C : LocString.PROMPT_NO_LOOP_FORMED_STEP_C;
+                else
+                    localized = problem.LastZoneIsPipe ? LocString.PROMPT_NO_LOOP_FORMED_PIPE : LocString.PROMPT_NO_LOOP_FORMED_STEP;
+                break;
         }
 
-        TrackEditor.Prompt.InitWarningPrompt(errorMesage, TrackEditor.Instance.SetTrackEditingMode);
+        if (problem.Cell.HasValue)
+        {
+            EditingMode.SetActiveModule((int)Modules.ID.TWM_START);
+            EditingMode.CursorPosition = problem.Cell.Value;
+        }
+
+        string message = localized.HasValue ? Localization.Lookup(localized.Value) : problem.Message;
+        TrackEditor.Prompt.InitWarningPrompt(message, TrackEditor.Instance.SetTrackEditingMode);
         TrackEditor.ShowPrompt();
     }
 
     IEnumerator ExportRoutine()
     {
-        var perfLogger = new PerfTimeLogger("Export:Total");
         ClockImage.sprite = ClockSprite;
         ShowProgressImages();
         SetExportProgress(0f);
 
-        // If there's no compiled levels folder, exit right here and now
-        if(FileHelper.GetCompiledLevelsPath() == null)
+        var job = new TrackExportJob(TrackEditor.Track, TrackEditor.TrackUnit, exportScale);
+        var run = job.Run();
+        while (run.MoveNext())
         {
-            TrackEditor.Prompt.InitWarningPrompt(LocString.PROMPT_NO_LEVELS_DIR, TrackEditor.Instance.SetTrackEditingMode);
-            TrackEditor.ShowPrompt();
+            SetExportProgress(job.Progress);
+            yield return run.Current;
+        }
+
+        if (!job.Succeeded)
+        {
+            clockLoopSource.Stop();
+            ShowExportProblem(job.Problem);
             yield break;
         }
 
-        // Otherwise, keep going
-        var exporter = new TrackExporter(TrackEditor.Track, TrackEditor.TrackUnit, exportScale);
-        exporter.Initialize();
-        yield return null;
-
-        int startGridCount = exporter.GetStartGridCount();
-        if(startGridCount != 1)
-        {
-            LocString errorMesage = (startGridCount == 0) ? LocString.PROMPT_MISSING_START_GRID
-                                                          : LocString.PROMPT_MULTIPLE_START_GRIDS;
-            TrackEditor.Prompt.InitWarningPrompt(errorMesage, TrackEditor.Instance.SetTrackEditingMode);
-            TrackEditor.ShowPrompt();
-            yield break;
-        }
-
-        if (!exporter.TrackFormsLoop)
-        {
-            ContinuityError(exporter);
-            yield break;
-        }
-        
-        SetExportProgress(0.1f);
-        yield return null;
-
-        // Create AI, check validity
-        exporter.CreateAINodes();
-        if (!exporter.AIIsValid)
-        {
-            ContinuityError(exporter);
-            yield break;
-        }
-
-        // Track is valid
-        // Create reversed exporter
-        var reverseExporter = new TrackExporter(TrackEditor.Track, TrackEditor.TrackUnit, true, exportScale);
-        reverseExporter.Initialize();
-        reverseExporter.CreateAINodes();
-
-        if (!reverseExporter.TrackFormsLoop || !reverseExporter.AIIsValid)
-            reverseExporter = null; // can't export reverse, set to null
-
-        // Create and empty destination folder
-        exporter.CreateTrackFolder();
-        exporter.EmptyTrackFolderContents();
-        reverseExporter?.CreateTrackFolder();
-
-        // Write the AI nodes
-        exporter.WriteAINodes();
-        reverseExporter?.WriteAINodes();
-
-        SetExportProgress(0.2f);
-        yield return null;
-
-        // Create world and collision file
-        var worldTask = Task.Run(() =>
-        {
-            exporter.CreateWorld();
-            exporter.WriteWorldFile();
-        });
-        var collisionTask = Task.Run(() =>
-        {
-            exporter.CreateCollision();
-            exporter.WriteCollision();
-        });
-
-        while(!worldTask.IsCompleted || !collisionTask.IsCompleted)
-        {
-            //0.2-0.5
-            float progress = 0.2f + (worldTask.IsCompleted ? 0.15f : 0f) + (collisionTask.IsCompleted ? 0.15f : 0f);
-            SetExportProgress(progress);
-            yield return null;
-        }
-
-        // Save zones, pos nodes, etc
-        exporter.WritePosNodesFile();
-        exporter.WriteZonesFile();
-
-        reverseExporter?.WritePosNodesFile();
-        reverseExporter?.WriteZonesFile();
-
-        exporter.WriteLightsFile();
-        exporter.WriteObjectsFile();
-
-        SetExportProgress(0.7f);
-        yield return null;
-
-        // Finally, copy textures and write info file
-        exporter.CopyBitmaps();
-        exporter.WriteInfoFile();
-
-        perfLogger.Log("Total");
         SetExportProgress(1f);
-        yield return null;
 
         // We're finished, ring the clock!
         ExportStageText.text = Localization.Lookup(LocString.EXPORT_STAGE_FINISHED);
