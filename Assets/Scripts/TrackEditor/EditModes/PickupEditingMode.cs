@@ -115,6 +115,24 @@ public class PickupEditingMode : EditorMode
         DebugDraw.PopMatrix();
     }
 
+    /// <summary>
+    /// Records the whole pickup session as one undoable change.
+    /// </summary>
+    private void CommitChanges()
+    {
+        var track = TrackEditor.Track;
+        var editedState = track.Cells.Select(x => x.HasPickup).ToArray();
+
+        // go back to the original state, then re-apply the edits as a recorded change
+        RevertChanges();
+        TrackEditor.RecordChange("Edit pickups", () =>
+        {
+            for (int i = 0; i < track.Cells.Length; i++)
+                track.Cells[i].HasPickup = editedState[i];
+            track.MarkDirty();
+        });
+    }
+
     private void RevertChanges()
     {
         var track = TrackEditor.Track;
@@ -164,7 +182,7 @@ public class PickupEditingMode : EditorMode
             if (modified)
             {
                 TrackEditor.Prompt.InitQuestionPrompt(LocString.PROMPT_KEEP_CHANGES,
-                                                      () => { TrackEditor.Track.MarkDirty(); TrackEditor.Instance.SetTrackEditingMode(); },
+                                                      () => { CommitChanges(); TrackEditor.Instance.SetTrackEditingMode(); },
                                                       () => { RevertChanges(); TrackEditor.Instance.SetTrackEditingMode(); });
                 TrackEditor.ShowPrompt();
             }
