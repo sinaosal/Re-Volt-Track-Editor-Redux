@@ -571,14 +571,32 @@ namespace Studio
         // Numeric fields: edit a text buffer, commit on Enter or when focus leaves
         private static readonly Dictionary<string, string> numberBuffers = new Dictionary<string, string>();
         private static readonly HashSet<string> focusedNumberFields = new HashSet<string>();
+        private static readonly Dictionary<string, int> numberFieldFrames = new Dictionary<string, int>();
+        private static readonly Dictionary<string, object> numberFieldOwners = new Dictionary<string, object>();
 
         /// <summary>
         /// A number field. Returns true (with the parsed value in <paramref name="result"/>) once, when the
         /// user commits a changed value with Enter or by leaving the field.
+        /// A typed value belongs to what the field showed while it was typed: if the field wasn't drawn last
+        /// frame, or <paramref name="owner"/> changed (another selection), the unfinished edit is dropped
+        /// instead of being applied to whatever the field shows now.
         /// </summary>
-        public static bool FloatField(Rect r, string controlName, float value, out float result, string format = "0.###")
+        public static bool FloatField(Rect r, string controlName, float value, out float result, string format = "0.###", object owner = null)
         {
             result = value;
+            int frame = Time.frameCount;
+            bool skippedFrames = numberFieldFrames.TryGetValue(controlName, out int lastFrame) && frame - lastFrame > 1;
+            bool ownerChanged = numberFieldOwners.TryGetValue(controlName, out object lastOwner) && !Equals(lastOwner, owner);
+            if (skippedFrames || ownerChanged)
+            {
+                focusedNumberFields.Remove(controlName);
+                numberBuffers.Remove(controlName);
+                if (IsFocused(controlName))
+                    GUIUtility.keyboardControl = 0;
+            }
+            numberFieldFrames[controlName] = frame;
+            numberFieldOwners[controlName] = owner;
+
             string shown = value.ToString(format, System.Globalization.CultureInfo.InvariantCulture);
             bool focused = IsFocused(controlName);
             bool committed = false;
@@ -617,10 +635,10 @@ namespace Studio
             return committed;
         }
 
-        public static bool IntField(Rect r, string controlName, int value, out int result)
+        public static bool IntField(Rect r, string controlName, int value, out int result, object owner = null)
         {
             result = value;
-            if (!FloatField(r, controlName, value, out float typed, "0"))
+            if (!FloatField(r, controlName, value, out float typed, "0", owner))
                 return false;
             result = Mathf.RoundToInt(typed);
             return result != value;
