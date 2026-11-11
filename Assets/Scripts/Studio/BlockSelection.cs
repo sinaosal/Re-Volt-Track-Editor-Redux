@@ -168,29 +168,31 @@ namespace Studio
     /// <summary>
     /// Editing-session state of blocks: locked (protected from Studio edits and keyboard placement) and
     /// hidden (not drawn in the viewport, still saved and exported). Not stored in the track file.
+    /// The state belongs to the block object itself, so it can never pass to another block that later
+    /// takes the same cell; a block that is re-created (undo, classic interface) simply loses it.
     /// </summary>
     public sealed class BlockStates
     {
-        private readonly HashSet<Vector2Int> locked = new HashSet<Vector2Int>();
-        private readonly HashSet<Vector2Int> hidden = new HashSet<Vector2Int>();
+        private readonly HashSet<ModulePlacement> locked = new HashSet<ModulePlacement>();
+        private readonly HashSet<ModulePlacement> hidden = new HashSet<ModulePlacement>();
 
         public int LockedCount => locked.Count;
         public int HiddenCount => hidden.Count;
 
-        public bool IsLocked(ModulePlacement p) => p != null && p.RootCell != null && locked.Contains(p.RootCell.Position);
-        public bool IsHidden(ModulePlacement p) => p != null && p.RootCell != null && hidden.Contains(p.RootCell.Position);
+        public bool IsLocked(ModulePlacement p) => p != null && locked.Contains(p);
+        public bool IsHidden(ModulePlacement p) => p != null && hidden.Contains(p);
 
         public void SetLocked(ModulePlacement p, bool value) => Set(locked, p, value);
         public void SetHidden(ModulePlacement p, bool value) => Set(hidden, p, value);
 
-        private static void Set(HashSet<Vector2Int> set, ModulePlacement p, bool value)
+        private static void Set(HashSet<ModulePlacement> set, ModulePlacement p, bool value)
         {
-            if (p == null || p.RootCell == null)
+            if (p == null)
                 return;
             if (value)
-                set.Add(p.RootCell.Position);
+                set.Add(p);
             else
-                set.Remove(p.RootCell.Position);
+                set.Remove(p);
         }
 
         public void ShowAll() => hidden.Clear();
@@ -202,30 +204,30 @@ namespace Studio
             hidden.Clear();
         }
 
-        /// <summary>Keeps the state with blocks that moved (old root to new root).</summary>
-        public void Remap(IList<(Vector2Int From, Vector2Int To)> moves)
+        /// <summary>Carries the state of replaced blocks over to their replacements (moving, turning, variants).</summary>
+        public void Transfer(IList<ModulePlacement> from, IList<bool> wasLocked, IList<bool> wasHidden, IList<ModulePlacement> to)
         {
-            Remap(locked, moves);
-            Remap(hidden, moves);
-        }
-
-        private static void Remap(HashSet<Vector2Int> set, IList<(Vector2Int From, Vector2Int To)> moves)
-        {
-            var carried = new List<Vector2Int>();
-            foreach (var (from, to) in moves)
+            for (int i = 0; i < to.Count && i < from.Count; i++)
             {
-                if (set.Remove(from))
-                    carried.Add(to);
+                locked.Remove(from[i]);
+                hidden.Remove(from[i]);
+                if (wasLocked[i])
+                    locked.Add(to[i]);
+                if (wasHidden[i])
+                    hidden.Add(to[i]);
             }
-            foreach (var to in carried)
-                set.Add(to);
         }
 
-        /// <summary>Drops entries whose block is gone.</summary>
+        /// <summary>Drops blocks that are no longer on the track.</summary>
         public void Prune()
         {
-            locked.RemoveWhere(r => BlockSelection.RootPlacement(r) == null);
-            hidden.RemoveWhere(r => BlockSelection.RootPlacement(r) == null);
+            locked.RemoveWhere(p => !IsOnTrack(p));
+            hidden.RemoveWhere(p => !IsOnTrack(p));
+        }
+
+        private static bool IsOnTrack(ModulePlacement p)
+        {
+            return p.RootCell != null && BlockSelection.RootPlacement(p.RootCell.Position) == p;
         }
     }
 }
