@@ -73,21 +73,29 @@ public class LoadMode : EditorMode
         {
             var text = texts[i - topPosition];
             text.color = (i == cursorPosition) ? Color.red : Color.white;
-            text.text = (i < fileCount) ? SavedFilesList.SavedFiles[i].Name : string.Empty;
+            text.text = (i < fileCount) ? SavedFilesList.SavedFiles[i].DisplayName : string.Empty;
         }
     }
 
     private void DeleteSelectedTrack()
     {
         var savedFile = SavedFilesList.SavedFiles[cursorPosition];
-        string question = string.Format(Localization.Lookup(LocString.PROMPT_REALLY_DELETE), savedFile.Name);
+        string question = string.Format(Localization.Lookup(LocString.PROMPT_REALLY_DELETE), savedFile.DisplayName);
 
         var postDeleteCursorPos = Mathf.Max(0, cursorPosition - 1);
         int preDeleteCursorPos = cursorPosition;
 
         TrackEditor.Prompt.InitQuestionPrompt(question, () =>
         {
-            File.Delete(savedFile.Path);
+            try
+            {
+                ReVolt.Track.TrackFiles.Delete(savedFile.Path);
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError($"Failed to delete track file '{savedFile.Path}': {ex}");
+                TrackEditor.PlaySound(TrackEditor.SndWarning);
+            }
             TrackEditor.Instance.OpenLoadScreenNoAskSave();
             this.cursorPosition = postDeleteCursorPos;
             OnCursorPosChanged();
@@ -104,21 +112,26 @@ public class LoadMode : EditorMode
     private void LoadSelectedTrack()
     {
         var savedFile = SavedFilesList.SavedFiles[cursorPosition];
-        try
+
+        // the file is validated completely before the current track is touched,
+        // so a broken file leaves the open track as it was
+        var result = TrackEditor.LoadTrackFile(savedFile.Path);
+        if (!result.Success)
         {
-            string trackPath = savedFile.Path;
-            TrackEditor.Track.Clear(); // clear all the old modules
-            TrackEditor.Track.Load(trackPath);
-            TrackEditor.Instance.SetTrackEditingMode();
+            Debug.LogError($"Failed to load track file: '{new FileInfo(savedFile.Path).Name}': {result.Error}");
+            TrackEditor.Prompt.InitWarningPrompt(result.Error, TrackEditor.Instance.OpenLoadScreenNoAskSave);
+            TrackEditor.ShowPrompt();
+            return;
         }
-        catch (System.Exception ex)
+
+        if (result.Warnings.Count > 0)
         {
-            // something happened, clear the track
-            Debug.LogError($"Failed to load track file: '{new FileInfo(savedFile.Path).Name}': {ex}");
-            TrackEditor.Track.Clear();
-            TrackEditor.PlaySound(TrackEditor.SndWarning);
-            TrackEditor.Instance.SetTrackEditingMode();
+            TrackEditor.Prompt.InitInfoPrompt(string.Join("\n", result.Warnings), TrackEditor.Instance.SetTrackEditingMode);
+            TrackEditor.ShowPrompt();
+            return;
         }
+
+        TrackEditor.Instance.SetTrackEditingMode();
     }
 
     // Virtuals
