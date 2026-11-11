@@ -152,7 +152,9 @@ public class Localization
     {
         if(!loaded.TryGetValue(id, out string str))
         {
-            str = id.ToString();
+            // no strings file installed: use built-in English rather than the identifier
+            if (!LocalizationFallback.TryGet(id, out str))
+                str = id.ToString();
         }
         return str;
     }
