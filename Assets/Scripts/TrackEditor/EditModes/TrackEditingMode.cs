@@ -18,6 +18,7 @@
 */
 
 using ReVolt.TrackUnit.Unity;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -78,6 +79,93 @@ public class TrackEditingMode : EditorMode
     private float cameraHeight = 5.55f;
     private float cameraDist = 3.7f;
 
+    // Studio integration
+    /// <summary>When false, another controller (the Studio viewport) positions the camera.</summary>
+    [NonSerialized] public bool ControlsCamera = true;
+
+    /// <summary>Classic blinking module preview. The Studio interface uses a steady preview.</summary>
+    [NonSerialized] public bool BlinkPreview = true;
+
+    /// <summary>Shows the module preview and cursor box. Hidden e.g. while the pointer is outside the viewport.</summary>
+    [NonSerialized] public bool PreviewVisible = true;
+
+    /// <summary>Raised instead of rotating the classic camera when <see cref="ControlsCamera"/> is false.</summary>
+    public event Action<int> CameraRotateRequested;
+
+    /// <summary>Raised when the module to place, its rotation, or the cursor height changes.</summary>
+    public event Action PlacementSettingsChanged;
+
+    /// <summary>Set by the Studio interface: blocks locked against editing. Placing over or deleting them is refused.</summary>
+    [NonSerialized] public Func<ModulePlacement, bool> IsProtected;
+
+    /// <summary>Set by the Studio interface: blocks hidden in the viewport (display only).</summary>
+    [NonSerialized] public Func<ModulePlacement, bool> IsHidden;
+
+    /// <summary>Raised when an edit is refused because it would change a locked block.</summary>
+    public event Action<string> EditRefused;
+
+    private bool Protected(ModulePlacement placement) => placement != null && IsProtected != null && IsProtected(placement);
+
+    /// <summary>A new inactive copy of a module's preview object (for ghosts); the caller destroys it.</summary>
+    public GameObject CreateModuleGhost(int moduleIndex)
+    {
+        if (moduleIndex < 0 || moduleIndex >= moduleObjects.Count)
+            return null;
+        var ghost = Instantiate(moduleObjects[moduleIndex]);
+        ghost.SetActive(false);
+        return ghost;
+    }
+
+    public int ActiveModuleIndex => activeModuleIndex;
+
+    public int ModuleRotation
+    {
+        get => moduleRotationTurns;
+        set
+        {
+            moduleRotationTurns = ((value % 4) + 4) % 4;
+            PlacementSettingsChanged?.Invoke();
+        }
+    }
+
+    /// <summary>Number of clockwise 90 degree camera turns; arrow keys move the cursor relative to it.</summary>
+    public int CameraRotationTurns
+    {
+        get => cameraRotationTurns;
+        set => cameraRotationTurns = ((value % 4) + 4) % 4;
+    }
+
+    public float CursorElevation => editingCursorHeight;
+
+    /// <summary>The classic orange cursor box. The Studio viewport draws its own footprint highlight.</summary>
+    [NonSerialized] public bool DrawCursorBox = true;
+
+    /// <summary>Flashes the cursor highlight, as after placing a module.</summary>
+    public void FlashCursor()
+    {
+        cursorHighlightTime = 0.25f;
+    }
+
+    public int MaxHeightSteps => TrackEditor.UnlimitedMode ? ushort.MaxValue : EditorConstants.MaxElevationSteps;
+
+    /// <summary>
+    /// Cells the module preview currently covers.
+    /// </summary>
+    public List<Vector2Int> GetPreviewFootprint()
+    {
+        return TrackEditor.GetFootprint(activeModuleIndex, editingCursor.Position, moduleRotationTurns);
+    }
+
+    /// <summary>
+    /// True if placing the preview would replace modules that are already on the track.
+    /// </summary>
+    public bool PreviewReplacesModules()
+    {
+        foreach (var _ in GetIntersectedModules())
+            return true;
+        return false;
+    }
+
     // "Events"
     private void OnActiveModuleChange()
     {
@@ -91,6 +179,7 @@ public class TrackEditingMode : EditorMode
     {
         activeModuleIndex = id;
         OnActiveModuleChange();
+        PlacementSettingsChanged?.Invoke();
     }
 
     public void PlaceModule(int moduleIndex, Vector2Int position, float elevation, int rotation)
@@ -137,9 +226,13 @@ public class TrackEditingMode : EditorMode
     // Placement and editing helpers
     private IEnumerable<ModulePlacement> GetIntersectedModules()
     {
+        var track = TrackEditor.Track;
         foreach (var instance in TrackEditor.TrackUnit.Modules[activeModuleIndex].Instances)
         {
-            var destCell = TrackEditor.Track.GetCell(editingCursor.Position + instance.Position.Rotate(moduleRotationTurns));
+            var pos = editingCursor.Position + instance.Position.Rotate(moduleRotationTurns);
+            if (pos.x < 0 || pos.y < 0 || pos.x >= track.Width || pos.y >= track.Height)
+                continue; // the cursor is re-clamped every frame; never throw in between
+            var destCell = track.GetCell(pos);
             if (destCell.Module != null)
             {
                 yield return destCell.Module;
@@ -186,6 +279,7 @@ public class TrackEditingMode : EditorMode
         {
             TrackEditor.PlaySound((heightChange > 0) ? TrackEditor.SndRaise : TrackEditor.SndLower);
             editingCursorHeightSteps = wantedHeight;
+            PlacementSettingsChanged?.Invoke();
         }
     }
 
@@ -201,6 +295,7 @@ public class TrackEditingMode : EditorMode
         TrackEditor.PlaySound(TrackEditor.SndRotate);
         moduleRotationTurns += rotateAmount;
         moduleRotationTurns = (moduleRotationTurns < 0) ? 3 : moduleRotationTurns % 4;
+        PlacementSettingsChanged?.Invoke();
     }
 
     public void NextVariant()
@@ -233,6 +328,13 @@ public class TrackEditingMode : EditorMode
 
     public void PlaceModule()
     {
+        if (GetIntersectedModules().Any(Protected))
+        {
+            TrackEditor.PlaySound(TrackEditor.SndWarning);
+            EditRefused?.Invoke("A locked block is in the way");
+            return;
+        }
+
         bool replacingPickups = GetIntersectedModules().Count(x => x.TouchedCells.Any(x => x.HasPickup)) != 0;
         if (replacingPickups)
             TrackEditor.PlaySound(TrackEditor.SndPlacePickup);
@@ -240,20 +342,35 @@ public class TrackEditingMode : EditorMode
         TrackEditor.PlaySound(TrackEditor.SndPlaceModule);
         cursorHighlightTime = 0.25f;
 
-        PlaceModule(activeModuleIndex, editingCursor.Position, editingCursorHeight, moduleRotationTurns);
+        int moduleIndex = activeModuleIndex;
+        var position = editingCursor.Position;
+        float height = editingCursorHeight;
+        int rotation = moduleRotationTurns;
+        TrackEditor.RecordChange($"Place {ModuleCatalog.GetDisplayName(moduleIndex)}",
+                                 () => PlaceModule(moduleIndex, position, height, rotation));
     }
 
     public void DeleteModule()
     {
         var cell = TrackEditor.Track.GetCell(editingCursor.Position);
+        if (Protected(cell.Module))
+        {
+            TrackEditor.PlaySound(TrackEditor.SndWarning);
+            EditRefused?.Invoke("That block is locked");
+            return;
+        }
         if (cell.Module != null)
         {
             bool replacingPickups = cell.Module.TouchedCells.Any(x => x.HasPickup);
             if (replacingPickups)
                 TrackEditor.PlaySound(TrackEditor.SndPlacePickup);
 
-            cell.Module.Delete();
-            TrackEditor.Track.MarkDirty();
+            var placement = cell.Module;
+            TrackEditor.RecordChange($"Delete {ModuleCatalog.GetDisplayName(placement.ModuleIndex)}", () =>
+            {
+                placement.Delete();
+                TrackEditor.Track.MarkDirty();
+            });
         }
         TrackEditor.PlaySound(TrackEditor.SndDelete);
     }
@@ -266,6 +383,7 @@ public class TrackEditingMode : EditorMode
             SetActiveModule(cell.Module.ModuleIndex);
             moduleRotationTurns = cell.Module.Rotation;
             editingCursorHeightSteps = Mathf.RoundToInt(cell.Module.Elevation / EditorConstants.ElevationStep);
+            PlacementSettingsChanged?.Invoke();
 
             TrackEditor.PlaySound(TrackEditor.SndAdjust);
             cursorHighlightTime = 0.25f;
@@ -294,21 +412,27 @@ public class TrackEditingMode : EditorMode
     // Other
     private void UpdateModuleFlash()
     {
-        bool currentActive = (Time.timeSinceLevelLoadAsDouble % 1d) >= 0.5;
+        bool currentActive = PreviewVisible && (!BlinkPreview || (Time.timeSinceLevelLoadAsDouble % 1d) >= 0.5);
         activeModule.SetActive(currentActive);
 
         // set every object on the grid to visible
         foreach (var rootModulePlacement in TrackEditor.Track.GetAllModuleRootPlacements())
-            rootModulePlacement.Object.SetActive(true);
+        {
+            if (rootModulePlacement.Object != null)
+                rootModulePlacement.Object.SetActive(IsHidden == null || !IsHidden(rootModulePlacement));
+        }
+
+        if (!PreviewVisible)
+            return;
 
         // now hide all modules that we intersect
         var module = TrackEditor.TrackUnit.Modules[activeModuleIndex];
         foreach (var instance in module.Instances)
         {
             var destCell = TrackEditor.Track.GetCell(editingCursor.Position + instance.Position.Rotate(moduleRotationTurns));
-            if (destCell.Module != null)
+            if (destCell.Module != null && destCell.Module.Object != null)
             {
-                destCell.Module.Object.SetActive(!currentActive);
+                destCell.Module.Object.SetActive(!currentActive && (IsHidden == null || !IsHidden(destCell.Module)));
             }
         }
     }
@@ -324,6 +448,9 @@ public class TrackEditingMode : EditorMode
 
     private void UpdateCamera()
     {
+        if (!ControlsCamera)
+            return;
+
         cameraRotation = Mathf.MoveTowardsAngle(cameraRotation, cameraRotationTarget, 180f * Time.deltaTime);
         var cameraDir = Quaternion.Euler(0f, cameraRotation, 0f) * -Vector3.forward;
 
@@ -413,7 +540,12 @@ public class TrackEditingMode : EditorMode
         // rotate cam
         int cameraRotationDelta = Controls.TrackEdit.GetCameraRotationDelta();
         if (cameraRotationDelta != 0)
-            RotateCamera(cameraRotationDelta);
+        {
+            if (ControlsCamera)
+                RotateCamera(cameraRotationDelta);
+            else
+                CameraRotateRequested?.Invoke(cameraRotationDelta);
+        }
 
         base.UpdateInput();
     }
@@ -427,7 +559,8 @@ public class TrackEditingMode : EditorMode
         cursorHighlightTime = Mathf.Max(0f, cursorHighlightTime - Time.deltaTime);
         editingCursor.Color = (cursorHighlightTime > 0f) ? new Color(0.7f, 0.2f, 1f)
                                                          : new Color(0.7f, 0.2f, 0f);
-        editingCursor.Draw();
+        if (PreviewVisible && DrawCursorBox)
+            editingCursor.Draw();
 
         base.Update();
     }
@@ -438,7 +571,10 @@ public class TrackEditingMode : EditorMode
 
         // set every object on the grid to visible
         foreach (var rootModulePlacement in TrackEditor.Track.GetAllModuleRootPlacements())
-            rootModulePlacement.Object.SetActive(true);
+        {
+            if (rootModulePlacement.Object != null)
+                rootModulePlacement.Object.SetActive(true);
+        }
     }
 
     // Mono
