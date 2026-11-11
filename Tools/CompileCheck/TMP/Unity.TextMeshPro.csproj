@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Unity.TextMeshPro</AssemblyName>
+    <DefineConstants>$(UnityDefines)</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(CacheDir)textmeshpro\Scripts\Runtime\**\*.cs" />
+    <ProjectReference Include="..\UGUI\UnityEngine.UI.csproj" />
+  </ItemGroup>
+</Project>
