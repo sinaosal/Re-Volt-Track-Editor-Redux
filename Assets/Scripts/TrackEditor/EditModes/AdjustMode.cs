@@ -201,9 +201,17 @@ public class AdjustMode : EditorMode
                 TrackEditor.Prompt.InitQuestionPrompt(LocString.PROMPT_KEEP_CHANGES,
                     () =>
                     {
-                        EditingMode.CursorPosition += movementOffset;
-                        TrackEditor.AdjustTrack(currentSize, movementOffset);
-                        TrackEditor.Track.MarkDirty();
+                        var size = currentSize;
+                        var offset = movementOffset;
+
+                        // the grid preview must be reset before the track itself changes
+                        RestoreGridSize();
+                        TrackEditor.RecordChange("Adjust track", () =>
+                        {
+                            TrackEditor.AdjustTrack(size, offset);
+                            TrackEditor.Track.MarkDirty();
+                        });
+                        EditingMode.CursorPosition += offset;
                         TrackEditor.Instance.SetTrackEditingMode();
                     },
                     () =>
