@@ -18,8 +18,11 @@
 */
 
 using ReVolt.TrackUnit;
+using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using UnityEngine;
 
 public static class FileHelper 
@@ -28,6 +31,18 @@ public static class FileHelper
 
     static string rootPath = null;
     static string gamePath = null;
+
+    const string trackUnitFileName = "trackunit.rtu";
+    static readonly List<string> searchedDataDirectories = new List<string>();
+
+    /// <summary>Folder containing the editor data files (trackunit.rtu, bitmaps, sounds).</summary>
+    public static string EditorDataDirectory => rootPath;
+
+    /// <summary>Folder where track designs (.TDF) are saved.</summary>
+    public static string SaveDirectory => tdfPath;
+
+    /// <summary>Re-Volt / RVGL installation folder, or null if none was found.</summary>
+    public static string GameDirectory => gamePath;
 
     static string soundsPath => Path.Combine(rootPath, "sounds");
     static string tdfPath => Path.Combine(rootPath, "TDF");
@@ -226,6 +241,63 @@ public static class FileHelper
     }
 
 
+    /// <summary>
+    /// The player normally lives inside the original editor folder (Re-Volt\editor) and is started from
+    /// there. It also finds the files when started from somewhere else (a shortcut, a terminal) or when
+    /// it sits next to a folder named "editor" that holds them.
+    /// </summary>
+    private static string FindEditorDataDirectory()
+    {
+        searchedDataDirectories.Clear();
+
+        var bases = new List<string> { Environment.CurrentDirectory };
+        try
+        {
+            // Application.dataPath is <exe folder>/<product>_Data
+            string exeDirectory = Path.GetDirectoryName(Application.dataPath);
+            if (!string.IsNullOrEmpty(exeDirectory))
+                bases.Add(exeDirectory);
+        }
+        catch (Exception)
+        {
+            // fall back to the working directory only
+        }
+
+        foreach (string baseDirectory in bases)
+        {
+            foreach (string candidate in new[] { baseDirectory, Path.Combine(baseDirectory, "editor") })
+            {
+                string full = Path.GetFullPath(candidate);
+                if (searchedDataDirectories.Any(x => string.Equals(x, full, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+
+                searchedDataDirectories.Add(full);
+                if (File.Exists(Path.Combine(full, trackUnitFileName)))
+                    return full;
+            }
+        }
+
+        return Environment.CurrentDirectory;
+    }
+
+    /// <summary>A user-facing explanation for when the original editor files are missing.</summary>
+    public static string DescribeMissingEditorFiles()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("The original Re-Volt track editor files were not found (trackunit.rtu, bitmaps and sounds).");
+        sb.AppendLine();
+#if UNITY_EDITOR
+        sb.AppendLine("Set editor_path.txt in the project folder to the folder that contains them.");
+#else
+        sb.AppendLine("Put this program in your Re-Volt\\editor folder, or next to a folder named \"editor\" that contains them.");
+#endif
+        sb.AppendLine();
+        sb.AppendLine("Looked in:");
+        foreach (string directory in searchedDataDirectories)
+            sb.AppendLine(directory);
+        return sb.ToString().TrimEnd();
+    }
+
     public static void Initialize()
     {
         if ((Application.platform == RuntimePlatform.WindowsPlayer 
@@ -240,9 +312,12 @@ public static class FileHelper
                 UnityEditor.EditorApplication.isPlaying = false;
                 return;
             }
-            rootPath = File.ReadAllText("editor_path.txt");
+            // trim: editors commonly add a trailing newline, which would make the path invalid
+            rootPath = File.ReadAllText("editor_path.txt").Trim().Trim('"');
+            searchedDataDirectories.Clear();
+            searchedDataDirectories.Add(rootPath);
 #else
-            rootPath = System.Environment.CurrentDirectory;
+            rootPath = FindEditorDataDirectory();
 #endif
 
             // look for Re-Volt in the parent folder
