@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>UnityEngine.UI</AssemblyName>
+    <DefineConstants>$(UnityDefines);PACKAGE_PHYSICS;PACKAGE_PHYSICS2D;PACKAGE_ANIMATION</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(CacheDir)ugui\Runtime\**\*.cs" />
+  </ItemGroup>
+</Project>
