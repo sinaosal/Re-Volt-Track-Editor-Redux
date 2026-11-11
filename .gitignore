@@ -58,3 +58,12 @@ sysinfo.txt
 # Crashlytics generated file
 crashlytics-build.properties
 
+
+# Unity-independent test projects and developer tools (outside Assets, never imported by Unity)
+!/Tests/**/*.csproj
+!/Tools/**/*.csproj
+/Tests/**/[Bb]in/
+/Tests/**/[Oo]bj/
+/Tools/**/[Bb]in/
+/Tools/**/[Oo]bj/
+/Tools/**/.cache/
