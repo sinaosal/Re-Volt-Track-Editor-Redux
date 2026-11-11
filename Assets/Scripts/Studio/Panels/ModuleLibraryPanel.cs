@@ -255,8 +255,9 @@ namespace Studio
                 // the star sits on the card, so it takes the pointer first
                 var star = new Rect(card.xMax - T.S(24f), card.y + T.S(3f), T.S(21f), T.S(21f));
                 bool hoverCard = SGUI.PointerIn(card);
-                bool starClicked = visible && (hoverCard || favorite) && SGUI.IconButton(star, favorite ? IconId.StarFilled : IconId.Star,
-                                                                                       favorite ? "Remove from favorites" : "Add to favorites", favorite);
+                // the click area exists on every visible card (so press and release must both be on this star);
+                // it's only active while the star shows
+                bool starClicked = visible && SGUI.ClickBehavior(star, hoverCard || favorite, out _, out _);
                 if (starClicked)
                     ToggleFavorite(entry.ModuleId);
 
@@ -268,6 +269,8 @@ namespace Studio
                     TrackEditor.PlaySound(TrackEditor.SndMenuMove);
                 }
                 SGUI.Tooltip(card, $"{entry.Name}  ·  {ModuleCatalog.GetCodeName(entry.ModuleId)}");
+                if (hoverCard || favorite)
+                    SGUI.Tooltip(star, favorite ? "Remove from favorites" : "Add to favorites");
 
                 // skip drawing cards that are scrolled out of view
                 if (!visible)
