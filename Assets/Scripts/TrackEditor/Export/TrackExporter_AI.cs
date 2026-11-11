@@ -179,6 +179,20 @@ public partial class TrackExporter
 
     public void WriteAINodes()
     {
+        var aiNodesFile = Overrides?.AINodes != null ? RaceData.CloneAINodes(Overrides.AINodes) : BuildAINodesFile();
+
+        if(exportScale != 1f)
+        {
+            aiNodesFile.Scale(exportScale);
+        }
+
+        string aiFilePath = Path.Combine(exportPath, $"{trackFolderName}.fan");
+        aiNodesFile.Save(aiFilePath);
+    }
+
+    /// <summary>The AI node file this exporter generates, in game units at regular scale.</summary>
+    public ReVolt.Track.AINodesFile BuildAINodesFile()
+    {
         var aiNodesFile = new ReVolt.Track.AINodesFile()
         {
             TotalDistance = lapDistance,
@@ -214,12 +228,6 @@ public partial class TrackExporter
             aiNodesFile.Nodes.Add(fileNode);
         }
 
-        if(exportScale != 1f)
-        {
-            aiNodesFile.Scale(exportScale);
-        }
-
-        string aiFilePath = Path.Combine(exportPath, $"{trackFolderName}.fan");
-        aiNodesFile.Save(aiFilePath);
+        return aiNodesFile;
     }
 }
