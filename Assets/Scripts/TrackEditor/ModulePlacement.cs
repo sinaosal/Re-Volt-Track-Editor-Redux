@@ -17,6 +17,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+using ReVolt.Track;
+using ReVolt.TrackUnit.Unity;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -32,6 +34,50 @@ public class ModulePlacement
     public GameObject Object;
     public readonly List<EditorTrackCell> TouchedCells = new List<EditorTrackCell>();
     public EditorTrackCell RootCell;
+
+    /// <summary>Custom support pillar colors; null uses the default look.</summary>
+    public SupportStyle? Support;
+
+    private static readonly int ColorProperty = Shader.PropertyToID("_Color");
+
+    public static Color ToColor(uint rgb)
+    {
+        return new Color32((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb, 255);
+    }
+
+    public static uint ToRgb(Color color)
+    {
+        Color32 c = color;
+        return ((uint)c.r << 16) | ((uint)c.g << 8) | c.b;
+    }
+
+    /// <summary>Tints the support pillars of the placed object to match <see cref="Support"/>.</summary>
+    public void ApplySupportVisual()
+    {
+        if (Object == null)
+            return;
+        var instance = Object.GetComponent<ModuleInstance>();
+        if (instance == null)
+            return;
+
+        MaterialPropertyBlock block = null;
+        if (Support.HasValue)
+        {
+            // the editor shows a single tint; weighted to the top color, which is what's mostly visible
+            var color = Color.Lerp(ToColor(Support.Value.Bottom), ToColor(Support.Value.Top), 0.7f);
+            block = new MaterialPropertyBlock();
+            block.SetColor(ColorProperty, color);
+        }
+
+        foreach (var unit in instance.Units)
+        {
+            if (unit.RootObject == null)
+                continue;
+            var renderer = unit.RootObject.GetComponent<MeshRenderer>();
+            if (renderer != null)
+                renderer.SetPropertyBlock(block);
+        }
+    }
 
     public void PositionObject()
     {
