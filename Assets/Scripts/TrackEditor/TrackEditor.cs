@@ -20,11 +20,12 @@
 using ReVolt.TrackUnit.Unity;
 using System;
 using System.Globalization;
+using System.IO;
 using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-public class TrackEditor : MonoBehaviour
+public partial class TrackEditor : MonoBehaviour
 {
     public static TrackEditor Instance { get; private set; }
 
@@ -67,6 +68,16 @@ public class TrackEditor : MonoBehaviour
     // settings
     public static bool UnlimitedMode { get; private set; } = false;
     public static float? ExportScaleOverride { get; private set; } = null;
+
+    /// <summary>A .tdf file passed on the command line (e.g. by dropping it onto the executable).</summary>
+    public static string StartupFilePath { get; private set; } = null;
+    private static InterfaceMode? interfaceOverride = null;
+
+    // interface
+    public static InterfaceMode ActiveInterface { get; private set; } = InterfaceMode.Classic;
+    public static event Action<InterfaceMode> InterfaceChanged;
+    private Studio.StudioShell studioShell;
+    private bool quitConfirmed = false;
 
     // useful ui
     public static PromptMode Prompt { get; private set; }
@@ -123,6 +134,22 @@ public class TrackEditor : MonoBehaviour
         string[] cmdLineArgs = Environment.GetCommandLineArgs();
         UnlimitedMode = Array.IndexOf(cmdLineArgs, "-unlimited") >= 0;
 
+        if (Array.IndexOf(cmdLineArgs, "-classic") >= 0)
+            interfaceOverride = InterfaceMode.Classic;
+        else if (Array.IndexOf(cmdLineArgs, "-studio") >= 0)
+            interfaceOverride = InterfaceMode.Studio;
+
+        // a track file given as a plain argument (also what Windows passes when a file is dropped onto the exe)
+        for (int i = 1; i < cmdLineArgs.Length; i++)
+        {
+            string arg = cmdLineArgs[i];
+            if (arg.EndsWith(".tdf", StringComparison.OrdinalIgnoreCase) && File.Exists(arg))
+            {
+                StartupFilePath = Path.GetFullPath(arg);
+                break;
+            }
+        }
+
         // process arguments with one parameter
         for (int i = 1; i < cmdLineArgs.Length - 1; i++)
         {
@@ -139,8 +166,17 @@ public class TrackEditor : MonoBehaviour
         Instance = this;
         var perfTimer = System.Diagnostics.Stopwatch.StartNew();
 
+        // handle args
+        ParseCommandLine();
+
         // init filesystem
         FileHelper.Initialize();
+
+        // user preferences and crash recovery
+        AppSettings.Load();
+        AppSettings.Changed += ApplyAudioSettings;
+        ApplyAudioSettings();
+        TrackRecovery.InitializeAtStartup();
 
         // update saved file list
         SavedFilesList.Update();
@@ -179,7 +215,7 @@ public class TrackEditor : MonoBehaviour
 
         if(TrackUnit == null)
         {
-            throw new System.IO.FileNotFoundException("RTU file not found.");
+            throw new EditorSetupException(FileHelper.DescribeMissingEditorFiles());
         }
 
         ProcessedTrackUnit = new TrackUnitUnity(TrackUnit);
@@ -203,6 +239,7 @@ public class TrackEditor : MonoBehaviour
         {
             AfterLoadCallback = OnTrackPostLoad
         };
+        InitSession();
 
         //init edit modes
         foreach (var mode in editModes)
@@ -215,8 +252,9 @@ public class TrackEditor : MonoBehaviour
         NewTrackAction();
         SetEditMode<TrackEditingMode>();
 
-        // handle args
-        ParseCommandLine();
+        // interface
+        Application.wantsToQuit += OnWantsToQuit;
+        InitInterface();
 
         Debug.Log($"TrackEditor fully initialized load time: {perfTimer.ElapsedMilliseconds}ms");
     }
@@ -236,7 +274,8 @@ public class TrackEditor : MonoBehaviour
             else
             {
                 Destroy(this.gameObject);
-                FailScreen.FailMessage = ex.ToString();
+                // setup problems are explained to the user; anything else keeps the details for bug reports
+                FailScreen.FailMessage = ex is EditorSetupException ? ex.Message : ex.ToString();
                 FailScreen.Show();
             }
         }
@@ -244,6 +283,31 @@ public class TrackEditor : MonoBehaviour
 
     private void UpdateInput()
     {
+        // the Studio interface owns menus, dialogs and shortcuts; it decides when the
+        // viewport may receive keyboard/gamepad editing input
+        if (ActiveInterface == InterfaceMode.Studio && studioShell != null)
+        {
+            if (studioShell.AllowsEditorInput)
+                currentEditMode?.UpdateInput();
+            return;
+        }
+
+        // classic undo/redo (Ctrl+Z, Ctrl+Y / Ctrl+Shift+Z) while placing modules
+        if (currentEditMode is TrackEditingMode && !PauseMenu.gameObject.activeInHierarchy && !HelpMenu.gameObject.activeInHierarchy
+            && Controls.IsControlHeld())
+        {
+            if (Controls.GetKeyDown(Key.Z))
+            {
+                if (Controls.IsShiftHeld()) Redo(); else Undo();
+                return;
+            }
+            if (Controls.GetKeyDown(Key.Y))
+            {
+                Redo();
+                return;
+            }
+        }
+
         // help and pause keys
         if(currentEditMode is TrackEditingMode)
         {
@@ -291,7 +355,15 @@ public class TrackEditor : MonoBehaviour
 
     void Update()
     {
+        // F10 switches between the Studio and the classic interface
+        if (Controls.GetKeyDown(Key.F10) && (studioShell == null || !studioShell.IsTextInputActive))
+        {
+            ToggleInterface();
+            return;
+        }
+
         UpdateInput();
+        TrackRecovery.Tick();
 
         // set mode name
         if (PauseMenu != null && PauseMenu.gameObject.activeInHierarchy)
@@ -343,6 +415,12 @@ public class TrackEditor : MonoBehaviour
     {
         if (Track.IsDirty)
         {
+            if (UnsavedChangesPrompt != null)
+            {
+                UnsavedChangesPrompt(action);
+                return;
+            }
+
             Prompt.InitQuestionPrompt(LocString.PROMPT_TRACK_NOT_SAVED, SetTrackEditingMode, () => { OpenSaveScreen(action); }, action);
             ShowPrompt();
         }
@@ -365,6 +443,15 @@ public class TrackEditor : MonoBehaviour
         Track.SetSize(width, height);
         grid.NumHorizontalSquares = Track.Width;
         grid.NumVerticalSquares = Track.Height;
+        ReclampCursor();
+    }
+
+    /// <summary>The cursor must stay inside the grid after it shrinks (cell lookups outside it throw).</summary>
+    private static void ReclampCursor()
+    {
+        var editing = GetEditMode<TrackEditingMode>();
+        if (editing != null && Track.Width > 0 && Track.Height > 0)
+            editing.CursorPosition = editing.CursorPosition;
     }
 
     public static void SetTrackSize(Vector2Int size)
@@ -379,10 +466,16 @@ public class TrackEditor : MonoBehaviour
         Track.AdjustTrack(newSize, shift);
         grid.NumHorizontalSquares = Track.Width;
         grid.NumVerticalSquares = Track.Height;
+        ReclampCursor();
     }
 
     private void QuitAction()
     {
+        // the user saved or chose to discard their changes
+        quitConfirmed = true;
+        TrackRecovery.Discard();
+        AppSettings.Save();
+
 #if UNITY_EDITOR
         UnityEditor.EditorApplication.isPlaying = false;
 #else
@@ -395,14 +488,40 @@ public class TrackEditor : MonoBehaviour
         AskToSaveBeforeAction(QuitAction);
     }
 
+    /// <summary>
+    /// Intercepts closing the window so unsaved work is never lost without asking.
+    /// </summary>
+    private bool OnWantsToQuit()
+    {
+        if (quitConfirmed || Track == null || !Track.IsDirty)
+        {
+            TrackRecovery.Discard();
+            return true;
+        }
+
+        // protect the changes in case the process is killed while the question is open
+        TrackRecovery.WriteNow();
+
+        if (ActiveInterface == InterfaceMode.Classic)
+            SetEditMode<TrackEditingMode>();
+        Quit();
+        return false;
+    }
+
     private void NewTrackAction()
     {
         Track.Name = FileHelper.GetFirstAvailableDefaultTrackName();
         Track.Clear();
+        Track.Extras = new ReVolt.Track.TrackExtras();
         SetTrackSize(16, 16);
         Track.ClearDirtyFlag();
         SetTrackEditingMode();
         GetEditMode<TrackEditingMode>().SetActiveModule((int)Modules.ID.TWM_START);
+
+        // the user explicitly started over, so there is nothing to recover
+        ResetSession(null);
+        TrackRecovery.Discard();
+        TrackRecovery.ResetTimer();
     }
 
     public void NewTrack()
@@ -459,6 +578,12 @@ public class TrackEditor : MonoBehaviour
     public void SetModuleSelectMode()
     {
         SetEditMode<ModuleSelectMode>();
+    }
+
+    private static void ApplyAudioSettings()
+    {
+        var settings = AppSettings.Data;
+        AudioListener.volume = settings.SoundsEnabled ? settings.SoundVolume : 0f;
     }
 
     public static void PlaySound(AudioClip clip)
