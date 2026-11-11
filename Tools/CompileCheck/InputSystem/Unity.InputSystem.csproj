@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Unity.InputSystem</AssemblyName>
+    <DefineConstants>$(UnityDefines);UNITY_INPUT_SYSTEM_ENABLE_UI;UNITY_INPUT_SYSTEM_ENABLE_PHYSICS;UNITY_INPUT_SYSTEM_ENABLE_PHYSICS2D;UNITY_XR_AVAILABLE</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(CacheDir)inputsystem\InputSystem\**\*.cs" />
+    <ProjectReference Include="..\UGUI\UnityEngine.UI.csproj" />
+  </ItemGroup>
+</Project>
