@@ -42,7 +42,7 @@ public partial class TrackExporter
                                          normal);
     }
 
-    private ReVolt.Track.SmallCube UnitToSmallCube(Unit unit, Matrix4x4 matrix, bool[] wallData = null)
+    private ReVolt.Track.SmallCube UnitToSmallCube(Unit unit, Matrix4x4 matrix, bool[] wallData = null, ReVolt.Track.SupportStyle? support = null)
     {
         var cube = new ReVolt.Track.SmallCube();
         
@@ -63,8 +63,18 @@ public partial class TrackExporter
                 var wallVerts = rootVertsArray[i];
                 var wallNormal = rootNormalsArray[i];
 
-                var wallColorTop = GetWallColor(unitPosition.y, wallNormal);
-                var wallColorBottom = GetShadedColor(EditorConstants.RootColorInGameMin, wallNormal);
+                Color wallColorTop, wallColorBottom;
+                if (support.HasValue)
+                {
+                    // block specific colors chosen in the editor: bottom at ground level, top at the block
+                    wallColorTop = GetShadedColor(ModulePlacement.ToColor(support.Value.Top), wallNormal);
+                    wallColorBottom = GetShadedColor(ModulePlacement.ToColor(support.Value.Bottom), wallNormal);
+                }
+                else
+                {
+                    wallColorTop = GetWallColor(unitPosition.y, wallNormal);
+                    wallColorBottom = GetShadedColor(EditorConstants.RootColorInGameMin, wallNormal);
+                }
 
                 // add wall quad to cube
                 cube.Vertices.Add(new ReVolt.Track.Vertex(wallVerts[0] + unitFloorPosition, wallNormal));
@@ -171,7 +181,7 @@ public partial class TrackExporter
                                        unit.CheckRootEdge(mod(2 - cell.Module.Rotation, 4)) && cell.CheckWall(track, Modules.Direction.South),
                                        unit.CheckRootEdge(mod(3 - cell.Module.Rotation, 4)) && cell.CheckWall(track, Modules.Direction.West)};
         
-        return UnitToSmallCube(unit, cellMatrix, wallData);
+        return UnitToSmallCube(unit, cellMatrix, wallData, cell.Module.Support);
     }
 
     private void FixUpWorld(int x, int y)
