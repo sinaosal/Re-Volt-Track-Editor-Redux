@@ -83,6 +83,11 @@ namespace ReVolt.Track
                 var light = Lights[i];
                 light.Reach *= scale;
                 light.Position *= scale;
+                if (light.Type == 4)
+                {
+                    // square shadow boxes store their half sizes in the colour
+                    light.Color = new Color(light.Color.r * scale, light.Color.g * scale, light.Color.b * scale, light.Color.a);
+                }
                 Lights[i] = light;
             }
         }
