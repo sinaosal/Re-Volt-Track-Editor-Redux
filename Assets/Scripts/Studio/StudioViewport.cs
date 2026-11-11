@@ -101,6 +101,9 @@ namespace Studio
 
         // block move (drag) preview
         private Vector2Int moveGrabCell;
+        private float moveGrabHeight;
+        private Vector2 pointerScreen;
+        private Vector2Int? lastPasteHover;
         private Vector2Int moveDelta;
         private int moveLevelDelta;
         private Vector2Int? clickedRoot;
@@ -402,6 +405,7 @@ namespace Studio
                 return;
 
             Vector2 screen = mouse.position.ReadValue();
+            pointerScreen = screen;
             var gui = new Vector2(screen.x, Screen.height - screen.y);
             Vector2 delta = gui - lastMouse;
             lastMouse = gui;
@@ -436,8 +440,12 @@ namespace Studio
                     EndPaste();
                 else
                 {
-                    if (PointerInside && HoverCell.HasValue)
-                        Paste.Anchor = HoverCell.Value;
+                    // on the plane of the pasted blocks, so raised copies stay under the pointer;
+                    // only when the pointer reaches another cell, so arrow keys can nudge too
+                    var pasteCell = PointerInside ? PointerCellAt(Paste.BaseLevel * EditorConstants.ElevationStep) : null;
+                    if (pasteCell.HasValue && pasteCell != lastPasteHover)
+                        Paste.Anchor = pasteCell.Value;
+                    lastPasteHover = pasteCell;
                     Paste.UpdateGhosts();
                 }
             }
@@ -627,7 +635,7 @@ namespace Studio
 
                 case StudioTool.Select:
                     {
-                        var module = TrackEditor.Track.GetCell(cell).Module;
+                        var module = VisibleModule(cell);
                         if (module == null)
                         {
                             BeginMarquee(gui);
@@ -660,6 +668,7 @@ namespace Studio
 
                         drag = DragMode.MoveSelection;
                         moveGrabCell = cell;
+                        moveGrabHeight = module.Elevation;
                         moveDelta = Vector2Int.zero;
                         moveLevelDelta = 0;
                         lastPaintCell = cell;
@@ -668,7 +677,7 @@ namespace Studio
 
                 case StudioTool.Pickups:
                     var trackCell = TrackEditor.Track.GetCell(cell);
-                    if (trackCell.Module == null)
+                    if (VisibleModule(cell) == null)
                     {
                         TrackEditor.PlaySound(TrackEditor.SndWarning);
                         shell.Toast("Pickups can only be placed on modules", IconId.Warning);
@@ -693,6 +702,16 @@ namespace Studio
 
         private void ContinueLeftDrag(TrackEditingMode editing)
         {
+            if (drag == DragMode.MoveSelection)
+            {
+                // on the plane of the grabbed block: hover picking would drop to other heights or the
+                // ground as soon as the pointer leaves the block, making raised blocks jump
+                var grabbed = PointerCellAt(moveGrabHeight);
+                if (grabbed.HasValue)
+                    moveDelta = grabbed.Value - moveGrabCell;
+                return;
+            }
+
             if (!HoverCell.HasValue)
                 return;
             var cell = HoverCell.Value;
@@ -715,9 +734,6 @@ namespace Studio
                     break;
                 case DragMode.Pickups:
                     SetPickup(cell, pickupPaintValue, false);
-                    break;
-                case DragMode.MoveSelection:
-                    moveDelta = cell - moveGrabCell;
                     break;
             }
             lastPaintCell = cell;
@@ -944,9 +960,13 @@ namespace Studio
             var selected = SelectedPlacements;
             if (selected.Count == 0)
                 return;
-            var rotated = BlockOperations.RotateGroup(selected, turns);
+            var pivot = SelectedPlacement.RootCell.Position;
+            var rotated = BlockOperations.RotateGroup(selected, turns, pivot);
             if (rotated != null)
+            {
                 Selection.SetMany(rotated.Select(p => p.RootCell.Position));
+                Selection.Add(pivot); // the pivot block stays the primary one
+            }
             else
                 ReportProblem("There's no room to turn the blocks");
         }
@@ -1001,6 +1021,7 @@ namespace Studio
         {
             var current = new HashSet<Vector2Int>(Selection.Roots);
             Selection.SetMany(TrackEditor.Track.GetAllModuleRootPlacements()
+                .Where(p => !States.IsHidden(p))
                 .Select(p => p.RootCell.Position)
                 .Where(r => !current.Contains(r))
                 .ToList());
@@ -1025,7 +1046,7 @@ namespace Studio
             var roots = new List<Vector2Int>();
             for (int i = 0; i < placements.Count; i++)
             {
-                if (sections.Contains(report.Component[i]))
+                if (sections.Contains(report.Component[i]) && !States.IsHidden(placements[i]))
                     roots.Add(placements[i].RootCell.Position);
             }
             Selection.SetMany(roots);
@@ -1039,7 +1060,7 @@ namespace Studio
             if (types.Count == 0)
                 return;
             Selection.SetMany(TrackEditor.Track.GetAllModuleRootPlacements()
-                .Where(p => types.Contains(p.ModuleIndex))
+                .Where(p => types.Contains(p.ModuleIndex) && !States.IsHidden(p))
                 .Select(p => p.RootCell.Position)
                 .ToList());
             TrackEditor.PlaySound(TrackEditor.SndMenuMove);
@@ -1105,6 +1126,7 @@ namespace Studio
             if (Tool != StudioTool.Select)
                 SetTool(StudioTool.Select);
             Paste = new PasteSession(items, anchor, verb);
+            lastPasteHover = null;
             Paste.UpdateGhosts();
             TrackEditor.PlaySound(TrackEditor.SndMenuOpen);
         }
@@ -1187,6 +1209,8 @@ namespace Studio
                 return;
 
             var placement = trackCell.Module;
+            if (States.IsHidden(placement))
+                return; // hidden blocks look like empty space, so they can't be erased by accident
             if (BlockOperations.IsLocked(placement))
             {
                 if (drag != DragMode.Erase || lastPaintCell != cell)
@@ -1211,7 +1235,7 @@ namespace Studio
 
             if (value)
             {
-                if (trackCell.Module == null)
+                if (trackCell.Module == null || States.IsHidden(trackCell.Module))
                     return false;
 
                 int count = track.Cells.Count(x => x.HasPickup);
@@ -1344,6 +1368,22 @@ namespace Studio
             if (!InBounds(g))
                 return null;
             return g;
+        }
+
+        /// <summary>The block on a cell, unless it's hidden (hidden blocks behave like empty space).</summary>
+        private ModulePlacement VisibleModule(Vector2Int cell)
+        {
+            if (!InBounds(cell))
+                return null;
+            var module = TrackEditor.Track.GetCell(cell).Module;
+            return module != null && !States.IsHidden(module) ? module : null;
+        }
+
+        /// <summary>The cell under the pointer on the plane at <paramref name="height"/> (inside the grid or not).</summary>
+        private Vector2Int? PointerCellAt(float height)
+        {
+            var ray = TrackEditor.Instance.Camera.ScreenPointToRay(pointerScreen);
+            return IntersectCell(ray, height);
         }
 
         private static Vector2Int? IntersectCell(Ray ray, float height)
