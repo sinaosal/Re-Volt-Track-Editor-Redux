@@ -107,7 +107,7 @@ public class Controls
         {
             if (Gamepad.current is Gamepad gamepad && gamepad.leftShoulder.wasPressedThisFrame)
                 return true;
-            if (Keyboard.current is Keyboard keyboard && keyboard[Key.Z].wasPressedThisFrame)
+            if (Keyboard.current is Keyboard keyboard && keyboard[Key.Z].wasPressedThisFrame && !IsCommandModifierHeld())
                 return true;
             return false;
         }
@@ -116,7 +116,7 @@ public class Controls
         {
             if (Gamepad.current is Gamepad gamepad && gamepad.rightShoulder.wasPressedThisFrame)
                 return true;
-            if (Keyboard.current is Keyboard keyboard && keyboard[Key.X].wasPressedThisFrame)
+            if (Keyboard.current is Keyboard keyboard && keyboard[Key.X].wasPressedThisFrame && !IsCommandModifierHeld())
                 return true;
             return false;
         }
@@ -125,7 +125,7 @@ public class Controls
         {
             if (Gamepad.current is Gamepad gamepad && gamepad.leftStickButton.wasPressedThisFrame)
                 return true;
-            if (Keyboard.current is Keyboard keyboard && keyboard[Key.T].wasPressedThisFrame)
+            if (Keyboard.current is Keyboard keyboard && keyboard[Key.T].wasPressedThisFrame && !IsCommandModifierHeld())
                 return true;
             return false;
 
@@ -134,7 +134,7 @@ public class Controls
         {
             if (Gamepad.current is Gamepad gamepad && gamepad.selectButton.wasPressedThisFrame)
                 return true;
-            if (Keyboard.current is Keyboard keyboard && keyboard[Key.C].wasPressedThisFrame)
+            if (Keyboard.current is Keyboard keyboard && keyboard[Key.C].wasPressedThisFrame && !IsCommandModifierHeld())
                 return true;
             return false;
         }
@@ -358,6 +358,30 @@ public class Controls
                 return true;
             return false;
         }
+    }
+
+    public static bool IsControlHeld()
+    {
+        return Keyboard.current is Keyboard keyboard && (keyboard.leftCtrlKey.isPressed || keyboard.rightCtrlKey.isPressed
+                                                         || keyboard.leftCommandKey.isPressed || keyboard.rightCommandKey.isPressed);
+    }
+
+    public static bool IsShiftHeld()
+    {
+        return Keyboard.current is Keyboard keyboard && (keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed);
+    }
+
+    public static bool IsAltHeld()
+    {
+        return Keyboard.current is Keyboard keyboard && (keyboard.leftAltKey.isPressed || keyboard.rightAltKey.isPressed);
+    }
+
+    /// <summary>
+    /// True if Ctrl/Cmd or Alt is held, i.e. a letter key is part of a shortcut rather than a classic editing key.
+    /// </summary>
+    public static bool IsCommandModifierHeld()
+    {
+        return IsControlHeld() || IsAltHeld();
     }
 
     public static bool IsNumLockActive()
