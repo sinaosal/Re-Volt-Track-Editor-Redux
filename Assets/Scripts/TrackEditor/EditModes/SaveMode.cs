@@ -17,6 +17,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+using ReVolt.Track;
 using System.IO;
 using TMPro;
 using UnityEngine;
@@ -50,7 +51,10 @@ public class SaveMode : EditorMode
 
     //
     private const int MAX_TEXT_LEN = 45;
-    private const string KEYBOARD = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~«¬";
+    private static readonly string KEYBOARD ="!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~" + BACKSPACE_KEY + SPACE_KEY;
+    // stand-ins shown on the on-screen keyboard (escaped so the source file stays plain ASCII)
+    private const char BACKSPACE_KEY = (char)0xAB;
+    private const char SPACE_KEY = (char)0xAC;
     private const int KEYS_PER_LINE = 16;
     private const int SAVE_BUTTON_VPOS = 6;
 
@@ -82,7 +86,8 @@ public class SaveMode : EditorMode
         }
         else
         {
-            if (currentText.Length < MAX_TEXT_LEN)
+            // the TDF format (and the original editor) only supports printable ASCII names
+            if (currentText.Length < MAX_TEXT_LEN && TdfDocument.IsValidNameChar(obj))
                 currentText += obj;
         }
 
@@ -107,18 +112,36 @@ public class SaveMode : EditorMode
 
     private void SaveTrack()
     {
-        string newTrackName = currentText.Trim();
-        string fullPath = FileHelper.GetTrackSavePath(newTrackName);
-        FileHelper.EnsureSaveDirectoryExists();
+        string newTrackName = TdfDocument.SanitizeName(currentText);
+        if (newTrackName.Length == 0)
+        {
+            // an empty name would produce a file called "!.TDF"
+            TrackEditor.PlaySound(TrackEditor.SndWarning);
+            return;
+        }
 
-        // set new track name
-        TrackEditor.Track.Name = newTrackName;
+        string fullPath = FileHelper.GetTrackSavePath(newTrackName);
 
         // save
         void SaveAction()
         {
-            TrackEditor.Track.Save(fullPath);
-            TrackEditor.Track.ClearDirtyFlag();
+            string previousName = TrackEditor.Track.Name;
+            try
+            {
+                FileHelper.EnsureSaveDirectoryExists();
+                TrackEditor.Track.Name = newTrackName;
+                TrackEditor.SaveTrackFile(fullPath); // atomic: the old file survives a failed save
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError($"Failed to save track to '{fullPath}': {ex}");
+                TrackEditor.Track.Name = previousName;
+                TrackEditor.Prompt.InitWarningPrompt(Localization.Lookup(LocString.PROMPT_ERROR_SAVING_TRACK) + "\n" + ex.Message,
+                                                     TrackEditor.Instance.SetTrackEditingMode);
+                TrackEditor.ShowPrompt();
+                AfterSaveCallback = null;
+                return;
+            }
 
             TrackEditor.Prompt.InitInfoPrompt(LocString.PROMPT_TRACK_SAVED, 3f, TrackEditor.Instance.SetTrackEditingMode);
             TrackEditor.ShowPrompt();
@@ -132,7 +155,6 @@ public class SaveMode : EditorMode
             TrackEditor.Prompt.InitQuestionPrompt(LocString.PROMPT_OVERWRITE_TRACK,
             () =>
             {
-                File.Delete(fullPath);
                 SaveAction();
             },
             () =>
