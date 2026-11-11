@@ -69,7 +69,7 @@ namespace Studio
             else if (Tool == StudioTool.Erase && HoverCell.HasValue && PointerInside)
             {
                 var module = track.GetCell(HoverCell.Value).Module;
-                if (module != null)
+                if (module != null && !States.IsHidden(module))
                 {
                     var color = BlockOperations.IsLocked(module) ? Palette.Warning.WithAlpha(0.2f) : Palette.FootprintErase;
                     foreach (var cell in module.TouchedCells)
@@ -118,7 +118,7 @@ namespace Studio
             if (drag == DragMode.None && HoverCell.HasValue && PointerInside && gizmoHover == GizmoAxis.None)
             {
                 var hovered = track.GetCell(HoverCell.Value).Module;
-                if (hovered != null && !Selection.Contains(hovered))
+                if (hovered != null && !Selection.Contains(hovered) && !States.IsHidden(hovered))
                 {
                     foreach (var cell in hovered.TouchedCells)
                         DrawCell(cell.Position, hovered.Elevation + 0.03f, Palette.Accent.WithAlpha(0.10f), true);
