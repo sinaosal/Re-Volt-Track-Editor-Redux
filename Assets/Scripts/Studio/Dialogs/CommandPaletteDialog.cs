@@ -131,6 +131,7 @@ namespace Studio
             }
 
             float contentHeight = visible.Count * RowHeight;
+            StudioCommand clicked = null;
             var content = SGUI.BeginScroll(inner, ref scroll, contentHeight);
             for (int i = 0; i < visible.Count; i++)
             {
@@ -141,8 +142,7 @@ namespace Studio
                 if (SGUI.RowBehavior(row, true, out bool hover, out _))
                 {
                     selected = i;
-                    Run(command);
-                    return;
+                    clicked = command;
                 }
                 if (row.yMax < 0f || row.y > inner.height)
                     continue;
@@ -171,6 +171,10 @@ namespace Studio
                 SGUI.KeyCaps(new Rect(row.xMax - keysWidth - T.S(10f), row.y, keysWidth, row.height), command.BindingText);
             }
             SGUI.EndScroll(inner, ref scroll, contentHeight);
+
+            // run after the scroll group is closed
+            if (clicked != null)
+                Run(clicked);
         }
 
         private void HandleKeys()
