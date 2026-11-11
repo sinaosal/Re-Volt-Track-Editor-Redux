@@ -33,6 +33,7 @@ public static class ConnectivityService
 
     private static ConnectivityReport cached;
     private static readonly List<ModulePlacement> cachedPlacements = new List<ModulePlacement>();
+    private static readonly Dictionary<ModulePlacement, int> cachedIndices = new Dictionary<ModulePlacement, int>();
     private static int cachedRevision = int.MinValue;
     private static EditorTrack cachedTrack;
 
@@ -108,6 +109,9 @@ public static class ConnectivityService
         if (cached == null || revision != cachedRevision || track != cachedTrack)
         {
             cached = Analyze(track, cachedPlacements);
+            cachedIndices.Clear();
+            for (int i = 0; i < cachedPlacements.Count; i++)
+                cachedIndices[cachedPlacements[i]] = i;
             cachedRevision = revision;
             cachedTrack = track;
         }
@@ -115,7 +119,7 @@ public static class ConnectivityService
     }
 
     /// <summary>Report index of a placement in the cached report, or -1.</summary>
-    public static int IndexOf(ModulePlacement placement) => cachedPlacements.IndexOf(placement);
+    public static int IndexOf(ModulePlacement placement) => placement != null && cachedIndices.TryGetValue(placement, out int i) ? i : -1;
 
     public static string DescribeModule(ModulePlacement placement)
     {
