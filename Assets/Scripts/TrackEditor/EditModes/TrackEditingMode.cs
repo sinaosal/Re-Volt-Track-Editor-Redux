@@ -331,7 +331,7 @@ public class TrackEditingMode : EditorMode
         if (GetIntersectedModules().Any(Protected))
         {
             TrackEditor.PlaySound(TrackEditor.SndWarning);
-            EditRefused?.Invoke("A locked block is in the way");
+            EditRefused?.Invoke("A locked or hidden block is in the way");
             return;
         }
 
@@ -356,7 +356,7 @@ public class TrackEditingMode : EditorMode
         if (Protected(cell.Module))
         {
             TrackEditor.PlaySound(TrackEditor.SndWarning);
-            EditRefused?.Invoke("That block is locked");
+            EditRefused?.Invoke("That block is locked or hidden");
             return;
         }
         if (cell.Module != null)
