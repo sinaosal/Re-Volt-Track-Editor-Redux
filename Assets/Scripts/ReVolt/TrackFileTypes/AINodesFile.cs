@@ -78,7 +78,9 @@ namespace ReVolt.Track
             Priority = (AINodePriority)reader.ReadByte();
             StartNode = reader.ReadByte();
             
-            Flags = reader.ReadInt16();
+            // wall flags are one byte the game writes twice (bit0 = wall left/green, bit1 = wall right/red)
+            Flags = reader.ReadByte();
+            reader.ReadByte();
 
             RacingLine = reader.ReadSingle();
             FinishDist = reader.ReadSingle();
@@ -109,7 +111,8 @@ namespace ReVolt.Track
             writer.Write((byte)Priority);
             writer.Write(StartNode);
 
-            writer.Write(Flags);
+            writer.Write((byte)Flags);
+            writer.Write((byte)Flags);
 
             writer.Write(RacingLine);
             writer.Write(FinishDist);
@@ -146,6 +149,7 @@ namespace ReVolt.Track
                 var node = Nodes[i];
                 node.GreenEnd.Position *= scale;
                 node.RedEnd.Position *= scale;
+                node.FinishDist *= scale;
                 Nodes[i] = node;
             }
         }
@@ -178,9 +182,31 @@ namespace ReVolt.Track
             TotalDistance = reader.ReadSingle();
         }
 
+        /// <summary>Packs links into the first slots (the game expects next[0] to be filled before next[1]).</summary>
+        private static int[] TopSlot(int[] links)
+        {
+            var packed = new[] { -1, -1 };
+            int k = 0;
+            foreach (int link in links ?? new int[0])
+            {
+                if (link >= 0 && k < 2)
+                    packed[k++] = link;
+            }
+            return packed;
+        }
+
         public void WriteBinary(BinaryWriter writer)
         {
-            int doubleForwardLinkCount = Nodes.Count(x => x.NextLinkIDs.Min() >= 0);
+            for (int i = 0; i < Nodes.Count; i++)
+            {
+                var node = Nodes[i];
+                node.PreviousLinkIDs = TopSlot(node.PreviousLinkIDs);
+                node.NextLinkIDs = TopSlot(node.NextLinkIDs);
+                Nodes[i] = node;
+            }
+
+            // the game allocates one extra node per branch (next[1] set); under-counting overruns its memory
+            int doubleForwardLinkCount = Nodes.Count(x => x.NextLinkIDs[1] >= 0);
         
             writer.Write((ushort)Nodes.Count);
             writer.Write((ushort)doubleForwardLinkCount);
