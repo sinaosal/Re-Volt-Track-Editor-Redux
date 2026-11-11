@@ -72,6 +72,16 @@ public partial class TrackExporter
     public IReadOnlyList<ZoneSequenceEntry> ZoneSequence => zoneSequence;
     public IReadOnlyList<TrackZone> Zones => zones;
 
+    /// <summary>
+    /// Race data edited in the editor. When set, its files are written instead of the generated
+    /// ones (the reversed track always uses generated data).
+    /// </summary>
+    public RaceData Overrides;
+
+    /// <summary>Folder the track is written to, or null if no game installation was found.</summary>
+    public string ExportPath => exportPath;
+    public string TrackFolderName => trackFolderName;
+
     private readonly TrackUnitFile unitFile;
     private EditorTrack originalTrack; // the reference to the original track, do not modify!
     public EditorTrack track; // our processed track with non user-accessible modules
@@ -284,19 +294,7 @@ public partial class TrackExporter
 
     public void WriteZonesFile()
     {
-        var zonesFile = new ReVolt.Track.ZonesFile();
-        
-        for(int i=0; i < zoneSequence.Count; i++)
-        {
-            var zone = zones[zoneSequence[(i + 1) % zoneSequence.Count].ZoneID];
-            zonesFile.Zones.Add(new ReVolt.Track.Zone()
-            {
-                ID = i,
-                Matrix = Matrix4x4.identity,
-                Position = zone.Center,
-                Size = zone.Size 
-            });
-        }
+        var zonesFile = Overrides?.Zones != null ? RaceData.CloneZones(Overrides.Zones) : BuildZonesFile();
 
         if(exportScale != 1f)
         {
@@ -307,7 +305,41 @@ public partial class TrackExporter
         zonesFile.Save(zoneFilePath);
     }
 
+    /// <summary>The track zone file this exporter generates, in game units at regular scale.</summary>
+    public ReVolt.Track.ZonesFile BuildZonesFile()
+    {
+        var zonesFile = new ReVolt.Track.ZonesFile();
+        
+        for(int i=0; i < zoneSequence.Count; i++)
+        {
+            var zone = zones[zoneSequence[(i + 1) % zoneSequence.Count].ZoneID];
+            zonesFile.Zones.Add(new ReVolt.Track.Zone()
+            {
+                ID = i,
+                Matrix = Matrix4x4.identity,
+                Position = zone.Center,
+                Size = zone.Size
+            });
+        }
+
+        return zonesFile;
+    }
+
     public void WritePosNodesFile()
+    {
+        var posFile = Overrides?.PosNodes != null ? RaceData.ClonePosNodes(Overrides.PosNodes) : BuildPosNodesFile();
+
+        if(exportScale != 1f)
+        {
+            posFile.Scale(exportScale);
+        }
+
+        string posNodeFilePath = Path.Combine(exportPath, $"{trackFolderName}.pan");
+        posFile.Save(posNodeFilePath);
+    }
+
+    /// <summary>The position node file this exporter generates, in game units at regular scale.</summary>
+    public ReVolt.Track.POSNodesFile BuildPosNodesFile()
     {
         var posFile = new ReVolt.Track.POSNodesFile()
         {
@@ -327,16 +359,24 @@ public partial class TrackExporter
             posFile.Nodes.Add(node);
         }
 
-        if(exportScale != 1f)
-        {
-            posFile.Scale(exportScale);
-        }
-
-        string posNodeFilePath = Path.Combine(exportPath, $"{trackFolderName}.pan");
-        posFile.Save(posNodeFilePath);
+        return posFile;
     }
 
     public void WriteObjectsFile()
+    {
+        var objectsFile = Overrides?.Objects != null ? RaceData.CloneObjects(Overrides.Objects) : BuildObjectsFile();
+
+        if (exportScale != 1f)
+        {
+            objectsFile.Scale(exportScale);
+        }
+
+        string objectsFilePath = Path.Combine(exportPath, $"{trackFolderName}.fob");
+        objectsFile.Save(objectsFilePath);
+    }
+
+    /// <summary>The object file (pickups) this exporter generates, in game units at regular scale.</summary>
+    public ReVolt.Track.ObjectsFile BuildObjectsFile()
     {
         var objectsFile = new ReVolt.Track.ObjectsFile();
 
@@ -359,16 +399,24 @@ public partial class TrackExporter
             });
         }
 
-        if (exportScale != 1f)
-        {
-            objectsFile.Scale(exportScale);
-        }
-
-        string objectsFilePath = Path.Combine(exportPath, $"{trackFolderName}.fob");
-        objectsFile.Save(objectsFilePath);
+        return objectsFile;
     }
 
     public void WriteLightsFile()
+    {
+        var lightsFile = Overrides?.Lights != null ? RaceData.CloneLights(Overrides.Lights) : BuildLightsFile();
+
+        if (exportScale != 1f)
+        {
+            lightsFile.Scale(exportScale);
+        }
+
+        string lightFilePath = Path.Combine(exportPath, $"{trackFolderName}.lit");
+        lightsFile.Save(lightFilePath);
+    }
+
+    /// <summary>The light file this exporter generates from the modules, in game units at regular scale.</summary>
+    public ReVolt.Track.LightsFile BuildLightsFile()
     {
         var lightsFile = new ReVolt.Track.LightsFile();
 
@@ -406,13 +454,7 @@ public partial class TrackExporter
             }
         }
 
-        if (exportScale != 1f)
-        {
-            lightsFile.Scale(exportScale);
-        }
-
-        string lightFilePath = Path.Combine(exportPath, $"{trackFolderName}.lit");
-        lightsFile.Save(lightFilePath);
+        return lightsFile;
     }
 
     public void CreateTrackFolder()
@@ -429,6 +471,47 @@ public partial class TrackExporter
                 file.Delete();
             foreach (DirectoryInfo dir in di.EnumerateDirectories())
                 dir.Delete(true);
+        }
+    }
+
+    /// <summary>
+    /// Writes edited instances and force fields, and copies the imported models they use.
+    /// Instances must also exist in the reversed folder, the game doesn't fall back for them.
+    /// </summary>
+    public void WriteCustomContent(TrackExporter reversedExporter)
+    {
+        if (Overrides == null)
+            return;
+
+        foreach (var model in Overrides.Models)
+        {
+            if (string.IsNullOrEmpty(model.SourcePath) || !File.Exists(model.SourcePath))
+                throw new FileNotFoundException($"The model '{model.FileName}' used by instances was not found at {model.SourcePath}.");
+
+            File.Copy(model.SourcePath, Path.Combine(exportPath, model.FileName), true);
+
+            // collision for the model, if there is one next to it
+            string ncp = Path.ChangeExtension(model.SourcePath, ".ncp");
+            if (File.Exists(ncp))
+                File.Copy(ncp, Path.Combine(exportPath, Path.ChangeExtension(model.FileName, ".ncp")), true);
+        }
+
+        if (Overrides.Instances.Instances.Count > 0)
+        {
+            var instances = RaceData.CloneInstances(Overrides.Instances);
+            if (exportScale != 1f)
+                instances.Scale(exportScale);
+            instances.Save(Path.Combine(exportPath, $"{trackFolderName}.fin"));
+            if (reversedExporter != null)
+                instances.Save(Path.Combine(reversedExporter.exportPath, $"{trackFolderName}.fin"));
+        }
+
+        if (Overrides.ForceFields.Fields.Count > 0)
+        {
+            var fields = RaceData.CloneForceFields(Overrides.ForceFields);
+            if (exportScale != 1f)
+                fields.Scale(exportScale);
+            fields.Save(Path.Combine(exportPath, $"{trackFolderName}.fld"));
         }
     }
 
@@ -829,10 +912,14 @@ public partial class TrackExporter
         this.originalTrack = track;
         this.unitFile = unitFile;
 
-        if(reversed)
-            this.exportPath = Path.Combine(FileHelper.GetCompiledLevelsPath(), trackFolderName, "reversed");
+        // without a game installation the exporter can still validate the track, it just can't write it
+        string levelsPath = FileHelper.GetCompiledLevelsPath();
+        if (levelsPath == null)
+            this.exportPath = null;
+        else if(reversed)
+            this.exportPath = Path.Combine(levelsPath, trackFolderName, "reversed");
         else
-            this.exportPath = Path.Combine(FileHelper.GetCompiledLevelsPath(), trackFolderName);
+            this.exportPath = Path.Combine(levelsPath, trackFolderName);
 
         this.track = track.Clone(false);
         this.exportScale = scale;
