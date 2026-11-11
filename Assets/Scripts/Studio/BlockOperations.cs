@@ -40,6 +40,18 @@ namespace Studio
         public static string LastProblem { get; private set; }
 
         public static bool IsLocked(ModulePlacement p) => States != null && States.IsLocked(p);
+        public static bool IsHidden(ModulePlacement p) => States != null && States.IsHidden(p);
+
+        /// <summary>Replaces blocks one for one, keeping their lock and hidden state.</summary>
+        private static List<ModulePlacement> ReplaceGroup(IList<ModulePlacement> blocks, IList<BlockSpec> specs, string label)
+        {
+            var wasLocked = blocks.Select(IsLocked).ToList();
+            var wasHidden = blocks.Select(IsHidden).ToList();
+            var result = ApplyGroup(blocks, specs, label, false);
+            if (result != null)
+                States?.Transfer(blocks, wasLocked, wasHidden, result);
+            return result;
+        }
 
         private static bool RefuseLocked(ModulePlacement p)
         {
@@ -237,8 +249,8 @@ namespace Studio
 
         /// <summary>
         /// Checks whether specs can be placed. Blocks in <paramref name="removing"/> don't count as obstacles;
-        /// other blocks do, unless <paramref name="replaceOthers"/> is set (then only locked ones do).
-        /// Returns null if they fit, otherwise the reason.
+        /// other blocks do, unless <paramref name="replaceOthers"/> is set (then only locked and hidden ones
+        /// do: nothing you can't see is replaced). Returns null if they fit, otherwise the reason.
         /// </summary>
         public static string CheckGroupFit(IEnumerable<BlockSpec> add, ICollection<ModulePlacement> removing, bool replaceOthers)
         {
@@ -248,7 +260,7 @@ namespace Studio
                 var other = track.GetCell(x, y).Module;
                 if (other == null || (removing != null && removing.Contains(other)))
                     return false;
-                return !replaceOthers || IsLocked(other);
+                return !replaceOthers || IsLocked(other) || IsHidden(other);
             });
         }
 
@@ -344,28 +356,22 @@ namespace Studio
             var specs = blocks.Select(p => BlockGroup.Translate(ToSpec(p), delta.x, delta.y, deltaLevel)).ToList();
             string what = blocks.Count == 1 ? "block" : $"{blocks.Count} blocks";
             string label = delta == Vector2Int.zero ? (deltaLevel > 0 ? $"Raise {what}" : $"Lower {what}") : $"Move {what}";
-            var moves = blocks.Select((p, i) => (p.RootCell.Position, new Vector2Int(specs[i].X, specs[i].Y))).ToList();
-            var result = ApplyGroup(blocks, specs, label, false);
-            if (result != null)
-                States?.Remap(moves);
-            return result;
+            return ReplaceGroup(blocks, specs, label);
         }
 
-        /// <summary>Turns blocks as a group around the middle of their footprint.</summary>
-        public static List<ModulePlacement> RotateGroup(IList<ModulePlacement> blocks, int turns)
+        /// <summary>
+        /// Turns blocks as a group around <paramref name="pivot"/>, normally the root cell of the block clicked
+        /// last. A fixed whole cell keeps turns exact: four turns, or a turn and its opposite, end where they
+        /// started (a pivot recomputed from the group's bounds would drift on even-sized groups).
+        /// </summary>
+        public static List<ModulePlacement> RotateGroup(IList<ModulePlacement> blocks, int turns, Vector2Int pivot)
         {
             if (blocks.Count == 0)
                 return null;
-            var cells = blocks.SelectMany(p => p.TouchedCells).Select(c => (c.Position.x, c.Position.y)).ToList();
-            var pivot = BlockGroup.Pivot(cells);
-            var specs = blocks.Select(p => BlockGroup.Rotate(ToSpec(p), pivot, turns)).ToList();
-            var moves = blocks.Select((p, i) => (p.RootCell.Position, new Vector2Int(specs[i].X, specs[i].Y))).ToList();
-            var result = ApplyGroup(blocks, specs, blocks.Count == 1 ? "Rotate block" : $"Rotate {blocks.Count} blocks", false);
+            var specs = blocks.Select(p => BlockGroup.Rotate(ToSpec(p), (pivot.x, pivot.y), turns)).ToList();
+            var result = ReplaceGroup(blocks, specs, blocks.Count == 1 ? "Rotate block" : $"Rotate {blocks.Count} blocks");
             if (result != null)
-            {
-                States?.Remap(moves);
                 TrackEditor.PlaySound(TrackEditor.SndRotate);
-            }
             return result;
         }
 
@@ -417,7 +423,7 @@ namespace Studio
                 TrackEditor.PlaySound(TrackEditor.SndWarning);
                 return 0;
             }
-            return ApplyGroup(remove, add, label, false)?.Count ?? 0;
+            return ReplaceGroup(remove, add, label)?.Count ?? 0;
         }
 
         /// <summary>Preset support colors offered in the inspector (null = the game's default gradient).</summary>
