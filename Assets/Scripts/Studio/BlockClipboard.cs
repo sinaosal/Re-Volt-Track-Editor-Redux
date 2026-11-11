@@ -71,6 +71,9 @@ namespace Studio
         public int Count => items.Count;
         public int Placements { get; set; }
 
+        /// <summary>Level of the lowest pasted block, as it would be placed now.</summary>
+        public int BaseLevel => items.Count == 0 ? 0 : items.Min(i => i.Level) + LevelOffset;
+
         private int ghostTurns = int.MinValue, ghostLevel = int.MinValue;
         private Vector2Int ghostAnchor = new Vector2Int(int.MinValue, int.MinValue);
 
