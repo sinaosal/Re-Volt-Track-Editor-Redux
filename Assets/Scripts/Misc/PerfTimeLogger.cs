@@ -25,8 +25,16 @@ public class PerfTimeLogger
     private long lastElapsedMs = 0;
     private Stopwatch backingStopwatch;
 
+    /// <summary>While above zero, timings aren't logged (track checks run the exporter after every edit).</summary>
+    public static int Muted;
+
     public void Log(string message)
     {
+        if (Muted > 0)
+        {
+            lastElapsedMs = backingStopwatch.ElapsedMilliseconds;
+            return;
+        }
         long totalElapsedMs = backingStopwatch.ElapsedMilliseconds;
         long delta = totalElapsedMs - lastElapsedMs;
 
