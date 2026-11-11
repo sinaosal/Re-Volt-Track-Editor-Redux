@@ -23,10 +23,19 @@ using UnityEngine;
 
 namespace ReVolt.Track
 {
+    /// <summary>
+    /// Object IDs understood by Re-Volt / RVGL (0..76). Note that 0 is a barrel, not "none".
+    /// </summary>
     public enum ObjectType
     {
-        None = 0,
-        Pickup = 30
+        Barrel = 0, Beachball = 1, Planet = 2, Plane = 3, Copter = 4, Dragon = 5, Water = 6, Trolley = 7, Boat = 8,
+        Speedup = 9, Radar = 10, Balloon = 11, Horse = 12, Train = 13, Strobe = 14, Football = 15, SparkGenerator = 16,
+        Spaceman = 17, Pickup = 30, Flap = 32, Laser = 33, Weebel = 36, ProbeLogo = 37, Clouds = 38, NameWheel = 39,
+        Sprinkler = 40, SprinklerHose = 41, ObjectThrower = 42, Basketball = 43, TrackScreen = 44, Clock = 45, CarBox = 46,
+        Stream = 47, Cup = 48, Sound3D = 49, Star = 50, Tumbleweed = 52, SmallScreen = 53, Lantern = 54, Skybox = 55,
+        Slider = 56, Bottle = 57, Bucket = 58, Cone = 59, Can = 60, Lilo = 61, Rain = 63, Lightning = 64, ShipLight = 65,
+        Packet = 66, AbcBlock = 67, WaterBox = 68, Ripple = 69, Flag = 70, Dolphin = 71, GardenFog = 72, FogBox = 73,
+        Chopper = 74, Disco = 75, CustomAnimation = 76
     }
 
     public struct Object : IBinSerializable
@@ -51,7 +60,7 @@ namespace ReVolt.Track
 
             Vector3 up = reader.ReadVector3();
             Vector3 forward = reader.ReadVector3();
-            Vector3 sideways = Vector3.Cross(forward, up);
+            Vector3 sideways = Vector3.Cross(up, forward); // the game uses right = up x look
 
             DirectionMatrix = Matrix4x4.identity;
             DirectionMatrix.SetColumn(0, sideways);
@@ -84,6 +93,30 @@ namespace ReVolt.Track
             {
                 var @object = Objects[i];
                 @object.Position *= scale;
+
+                // some types store distances in their flags
+                int S(int value) => Mathf.RoundToInt(value * scale);
+                switch (@object.Type)
+                {
+                    case ObjectType.Plane:
+                        @object.Flags2 = S(@object.Flags2); // radius
+                        break;
+                    case ObjectType.Copter:
+                        @object.Flags1 = S(@object.Flags1); // ranges and height offset
+                        @object.Flags2 = S(@object.Flags2);
+                        @object.Flags3 = S(@object.Flags3);
+                        @object.Flags4 = S(@object.Flags4);
+                        break;
+                    case ObjectType.Speedup:
+                        @object.Flags1 = S(@object.Flags1); // width
+                        break;
+                    case ObjectType.WaterBox:
+                    case ObjectType.FogBox:
+                        @object.Flags1 = S(@object.Flags1); // half sizes
+                        @object.Flags2 = S(@object.Flags2);
+                        @object.Flags3 = S(@object.Flags3);
+                        break;
+                }
                 Objects[i] = @object;
             }
         }
