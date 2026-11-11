@@ -1,0 +1,28 @@
+name: CI
+
+# Unity isn't available on hosted runners without a license, so CI checks what can be checked
+# without it: the Unity-independent core (unit tests) and that every script compiles against
+# Unity 2020.3.21 reference assemblies and the project's package versions.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Core unit tests
+        run: dotnet run --project Tests/Core.Tests
+
+      - name: Fetch Unity reference assemblies and packages
+        run: bash Tools/CompileCheck/fetch.sh
+
+      - name: Compile game scripts
+        run: dotnet build Tools/CompileCheck/Game/Assembly-CSharp.csproj
